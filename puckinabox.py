@@ -3,10 +3,8 @@ from jax import numpy as jp
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle, Circle
-import numpy as np
 
 # Import Brax
-from brax import base
 from brax.io import mjcf
 
 # Create an MJCF model for our 2D puck in a box with a static obstacle
@@ -14,12 +12,10 @@ box_size = 2.0
 puck_radius = 0.2
 obstacle_radius = 0.3
 
-# Make sure obstacle and puck are at DIFFERENT positions but closer to each other
+# Make sure obstacle and puck are at different positions
 obstacle_pos = [0.2, 0.3, 0]  # Position of the static obstacle
-puck_pos = [-0.2, 0.1, 0]  # Position of the puck - closer to obstacle
+puck_pos = [-0.2, 0.1, 0]  # Position of the puck
 
-# MJCF model with a static obstacle (as a geom instead of a body)
-# Let's try using a cylinder with minimal height - just at the threshold
 mjcf_string = f"""
 <mujoco model="2d_puck">
   <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
@@ -54,7 +50,6 @@ mjcf_string = f"""
 sys = mjcf.loads(mjcf_string)
 
 # Set up initial state with the puck's initial position
-# Don't use the default initialization, set the position explicitly
 init_q = jp.array([puck_pos[0], puck_pos[1], puck_pos[2], 1.0, 0.0, 0.0, 0.0])
 
 # Velocity toward the obstacle
@@ -69,117 +64,21 @@ from brax.spring import pipeline
 # Initialize the physics state
 state = pipeline.init(sys, init_q, init_qd)
 
-# Check initial separation - now using geometry info directly
-puck_radius = 0.2  # Use the same value as defined above
-obstacle_radius = 0.3  # Use the same value as defined above
-# Use the obstacle_pos defined earlier
-obstacle_pos = jp.array(obstacle_pos)
 
-# Get puck position from state
-puck_pos = state.x.pos[0]
-
-initial_distance = jp.sqrt(jp.sum((puck_pos[:2] - obstacle_pos[:2]) ** 2))
-min_required_distance = puck_radius + obstacle_radius
-print(f"Initial separation: {initial_distance}")
-print(f"Minimum required separation: {min_required_distance}")
-print(f"Gap between surfaces: {initial_distance - min_required_distance}")
-
-if initial_distance < min_required_distance:
-    print("ERROR: Puck and obstacle are overlapping at start!")
-else:
-    print("OK: Puck and obstacle properly separated at start")
-
-
-# Function to print system geometries
-def print_system_geometries(system):
-    """Print information about all geometries in a Brax system."""
-    for i in range(system.ngeom):
-        print(f'geometry_{i}: {sys.geom_pos[i]}')
-
-
-# Function to simulate with position tracking and detailed debug info
+# Function to simulate with position tracking
 def simulate(state, n_steps=100):
     states = [state]
-
-    # Track puck positions
     puck_positions = []
-    detailed_debug = []
 
     # JIT-compile the step function
     step_fn = jax.jit(pipeline.step)
 
-    # For debugging, dump the full system info first
-    print("\nSystem state at start:")
-    print(f"System has {sys.nbody} bodies")
-    print(f"System has {sys.ngeom} geoms")
-
-    # Print detailed geometry information
-    print_system_geometries(sys)
-
-    # Print link information
-    print("\nLink information:")
-    if hasattr(state, 'x'):
-        print(f"Number of links in state: {len(state.x.pos)}")
-        for i in range(len(state.x.pos)):
-            print(f"Link {i} position: {state.x.pos[i]}")
-
-    # Determine obstacle position using geometry information
-    obstacle_pos_in_sys = jp.array(obstacle_pos)  # Default position
-
-    # Look for the obstacle in the geometry information
-    if hasattr(sys, 'geom') and hasattr(sys.geom, 'pos'):
-        # In this setup, geom 1 should be the obstacle (index starts at 0)
-        # Geom 0 would be the puck's geometry
-        obstacle_idx = 1
-        if obstacle_idx < len(sys.geom.pos):
-            obstacle_pos_in_sys = sys.geom.pos[obstacle_idx]
-            print(f"\nUsing obstacle at position {obstacle_pos_in_sys} from system geometry")
-
-    print(f"Using obstacle position: {obstacle_pos_in_sys}")
-
     for i in range(n_steps):
-        # if i == 165:
-        #     breakpoint()
-        # Record puck position before step
-        puck_pos = state.x.pos[0].copy()
-        puck_positions.append(puck_pos[:2].tolist())
-
-        # Calculate distance using obstacle position extracted from system
-        distance = jp.sqrt(jp.sum((state.x.pos[0, :2] - obstacle_pos_in_sys[:2]) ** 2))
-
-        # Print debug info at regular intervals
-        if i % 20 == 0 or (i > 0 and i < 10):
-            print(f"Step {i}:")
-            print(f"  Puck position: {state.x.pos[0]}")
-            print(f"  Puck velocity: {state.xd.vel[0]}")
-            print(f"  Distance to obstacle: {distance}")
-            print(f"  Min required distance: {min_required_distance}")
-
-            # Check for contacts in this state
-            if hasattr(state, 'contact') and state.contact is not None:
-                print(f"  Contact detected!")
-                if hasattr(state.contact, 'pos'):
-                    print(f"  Contact position: {state.contact.pos}")
-
-            print_system_geometries(sys)
-
-        debug_entry = {
-            'step': i,
-            'puck_pos': state.x.pos[0].copy(),
-            'puck_vel': state.xd.vel[0].copy(),
-            'distance': float(distance),
-            'penetration': float(max(0, min_required_distance - distance))
-        }
-        detailed_debug.append(debug_entry)
+        # Record puck position
+        puck_positions.append(state.x.pos[0, :2].tolist())
 
         # Take a step
-        prev_state = state
         state = step_fn(sys, state, None)
-
-        # Check for sudden position changes (possible penetration fixes)
-        pos_change = jp.linalg.norm(state.x.pos[0] - prev_state.x.pos[0])
-        vel_mag = jp.linalg.norm(prev_state.xd.vel[0])
-        expected_change = vel_mag * sys.opt.timestep
 
         # Enforce 2D constraint
         state = state.replace(
@@ -197,30 +96,11 @@ def simulate(state, n_steps=100):
     # Add final position
     puck_positions.append(state.x.pos[0, :2].tolist())
 
-    # Print summary of potential penetrations
-    penetrations = [d['penetration'] for d in detailed_debug]
-    if max(penetrations) > 0:
-        worst_step = penetrations.index(max(penetrations))
-        print(f"\nWORST PENETRATION at step {worst_step}:")
-        print(f"  Penetration depth: {max(penetrations)}")
-        print(f"  Puck position: {detailed_debug[worst_step]['puck_pos']}")
-        print(f"  Puck velocity: {detailed_debug[worst_step]['puck_vel']}")
-
-    return states, puck_positions, detailed_debug
+    return states, puck_positions
 
 
 # Run the simulation
-states, puck_positions, debug_info = simulate(state, 500)
-
-# Print the system configuration for debugging
-print("\nSystem information:")
-print(f"Number of bodies: {sys.nbody}")
-print(f"Number of geoms: {sys.ngeom}")
-print(f"Timestep: {sys.opt.timestep}")
-print(f"Elasticity: {sys.elasticity if hasattr(sys, 'elasticity') else 'Not directly accessible'}")
-
-for step in debug_info:
-    print(step)
+states, puck_positions = simulate(state, 500)
 
 # Create an animation of the simulation
 fig, ax = plt.subplots(figsize=(8, 8))
@@ -237,7 +117,7 @@ box = Rectangle((-box_size / 2, -box_size / 2), box_size, box_size,
                 facecolor='none', edgecolor='black', linewidth=2)
 ax.add_patch(box)
 
-# Draw the static obstacle - now static, doesn't move with animation
+# Draw the static obstacle
 obstacle = Circle((obstacle_pos[0], obstacle_pos[1]),
                   obstacle_radius, facecolor='green', edgecolor='black')
 ax.add_patch(obstacle)
@@ -254,10 +134,8 @@ arrowhead, = ax.plot([], [], 'r.', ms=10)
 # Add trail for the puck
 puck_trail, = ax.plot([], [], '-', color='blue', alpha=0.5, linewidth=1)
 
-# Add text for positions and simulation info
-puck_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, verticalalignment='top')
-distance_text = ax.text(0.05, 0.90, '', transform=ax.transAxes, verticalalignment='top')
-frame_text = ax.text(0.05, 0.85, '', transform=ax.transAxes, verticalalignment='top')
+# Add text for frame count
+frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, verticalalignment='top')
 
 
 # Animation update function
@@ -290,15 +168,10 @@ def update(frame, trail_length=20):
     puck_trail.set_data([p[0] for p in puck_positions[trail_start:trail_end]],
                         [p[1] for p in puck_positions[trail_start:trail_end]])
 
-    # Calculate distance for current frame
-    dist = jp.sqrt((puck_x - obstacle_pos[0]) ** 2 + (puck_y - obstacle_pos[1]) ** 2)
-
-    # Update text
-    puck_text.set_text(f'Puck: ({puck_x:.4f}, {puck_y:.4f})')
-    distance_text.set_text(f'Distance: {dist:.4f} (Min req: {min_required_distance:.4f})')
+    # Update frame text
     frame_text.set_text(f'Frame: {frame}')
 
-    return [puck, vel_line, arrowhead, puck_trail, puck_text, distance_text, frame_text]
+    return [puck, vel_line, arrowhead, puck_trail, frame_text]
 
 
 # Create the animation
