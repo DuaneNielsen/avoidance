@@ -7,16 +7,22 @@ from matplotlib.patches import Rectangle, Circle
 # Import Brax
 from brax.io import mjcf
 
-# Create an MJCF model for our 2D puck in a box with a static obstacle
+# Create an MJCF model for our 2D puck in a box with multiple obstacles
 box_size = 2.0
 puck_radius = 0.2
-obstacle_radius = 0.3
 
-# Make sure obstacle and puck are at different positions
-obstacle_pos = [0.2, 0.3, 0]  # Position of the static obstacle
-puck_pos = [-0.2, 0.1, 0]  # Position of the puck
+# Define obstacles - each is [x, y, radius, color]
+obstacles = [
+    [0.2, 0.3, 0.2, "0.2 0.7 0.2 1"],      # Green obstacle
+    [-0.5, 0.7, 0.25, "0.7 0.2 0.2 1"],    # Red obstacle
+    [0.7, -0.5, 0.2, "0.2 0.2 0.7 1"]      # Blue obstacle
+]
 
-mjcf_string = f"""
+# Puck starting position
+puck_pos = [-0.2, 0.1, 0]
+
+# Begin building the MJCF string
+mjcf_string = """
 <mujoco model="2d_puck">
   <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
   <option timestep="0.005" gravity="0 0 0" />
@@ -27,24 +33,31 @@ mjcf_string = f"""
   </custom>
   <worldbody>
     <!-- The puck -->
-    <body name="puck" pos="{puck_pos[0]} {puck_pos[1]} {puck_pos[2]}">
+    <body name="puck" pos="{0} {1} {2}">
       <joint type="free" name="puck_joint"/>
-      <geom name="puck_geom" type="sphere" size="{puck_radius}" mass="1" rgba="0.7 0.2 0.8 1"/>
+      <geom name="puck_geom" type="sphere" size="{3}" mass="1" rgba="0.7 0.2 0.8 1"/>
     </body>
+""".format(puck_pos[0], puck_pos[1], puck_pos[2], puck_radius)
 
-    <!-- Static obstacle - using a cylinder with minimal height -->
-    <geom name="obstacle" type="cylinder" pos="{obstacle_pos[0]} {obstacle_pos[1]} {obstacle_pos[2]}" 
-          size="{obstacle_radius} 0.0001" rgba="0.2 0.7 0.2 1" contype="1" conaffinity="1"/>
+# Add obstacles
+for i, (x, y, radius, color) in enumerate(obstacles):
+    mjcf_string += """
+    <!-- Obstacle {0} -->
+    <geom name="obstacle_{0}" type="cylinder" pos="{1} {2} 0" 
+          size="{3} 0.0001" rgba="{4}" contype="1" conaffinity="1"/>
+""".format(i, x, y, radius, color)
 
+# Add walls
+mjcf_string += """
     <!-- Walls of the box -->
-    <geom name="bottom_wall" type="plane" pos="0 0 -0.1" size="{box_size} {box_size} 0.1" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
-    <geom name="left_wall" type="plane" pos="-{box_size / 2} 0 0" size="0.1 {box_size} {box_size}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="1 0 0"/>
-    <geom name="right_wall" type="plane" pos="{box_size / 2} 0 0" size="0.1 {box_size} {box_size}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="-1 0 0"/>
-    <geom name="top_wall" type="plane" pos="0 {box_size / 2} 0" size="{box_size} 0.1 {box_size}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="0 -1 0"/>
-    <geom name="bottom_wall2" type="plane" pos="0 -{box_size / 2} 0" size="{box_size} 0.1 {box_size}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="0 1 0"/>
+    <geom name="bottom_wall" type="plane" pos="0 0 -0.1" size="{0} {0} 0.1" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
+    <geom name="left_wall" type="plane" pos="-{1} 0 0" size="0.1 {0} {0}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="1 0 0"/>
+    <geom name="right_wall" type="plane" pos="{1} 0 0" size="0.1 {0} {0}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="-1 0 0"/>
+    <geom name="top_wall" type="plane" pos="0 {1} 0" size="{0} 0.1 {0}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="0 -1 0"/>
+    <geom name="bottom_wall2" type="plane" pos="0 -{1} 0" size="{0} 0.1 {0}" rgba="0.8 0.8 0.8 1" conaffinity="1" zaxis="0 1 0"/>
   </worldbody>
 </mujoco>
-"""
+""".format(box_size, box_size / 2)
 
 # Load the MJCF model into Brax
 sys = mjcf.loads(mjcf_string)
@@ -52,8 +65,9 @@ sys = mjcf.loads(mjcf_string)
 # Set up initial state with the puck's initial position
 init_q = jp.array([puck_pos[0], puck_pos[1], puck_pos[2], 1.0, 0.0, 0.0, 0.0])
 
-# Velocity toward the obstacle
-direction = jp.array([obstacle_pos[0], obstacle_pos[1]]) - jp.array([puck_pos[0], puck_pos[1]])
+# Target the first obstacle with initial velocity
+first_obstacle = obstacles[0]
+direction = jp.array([first_obstacle[0], first_obstacle[1]+0.2]) - jp.array([puck_pos[0], puck_pos[1]])
 direction = direction / jp.sqrt(jp.sum(direction ** 2))  # Normalize
 speed = 5.0
 init_qd = jp.array([direction[0] * speed, direction[1] * speed, 0.0, 0.0, 0.0, 0.0])
@@ -109,7 +123,7 @@ fig, ax = plt.subplots(figsize=(8, 8))
 ax.set_xlim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_ylim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_aspect('equal')
-ax.set_title('2D Puck Simulation with Static Obstacle')
+ax.set_title('2D Puck Simulation with Multiple Obstacles')
 ax.grid(True)
 
 # Draw the box
@@ -117,10 +131,13 @@ box = Rectangle((-box_size / 2, -box_size / 2), box_size, box_size,
                 facecolor='none', edgecolor='black', linewidth=2)
 ax.add_patch(box)
 
-# Draw the static obstacle
-obstacle = Circle((obstacle_pos[0], obstacle_pos[1]),
-                  obstacle_radius, facecolor='green', edgecolor='black')
-ax.add_patch(obstacle)
+# Draw the obstacles
+obstacle_patches = []
+for i, (x, y, radius, color_str) in enumerate(obstacles):
+    color_values = [float(c) for c in color_str.split()[:3]]  # Extract RGB from RGBA string
+    obstacle = Circle((x, y), radius, facecolor=color_values, edgecolor='black')
+    ax.add_patch(obstacle)
+    obstacle_patches.append(obstacle)
 
 # Initialize the puck with initial position from state
 puck = Circle((puck_positions[0][0], puck_positions[0][1]),
