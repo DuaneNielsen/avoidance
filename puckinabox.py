@@ -80,106 +80,140 @@ from brax.spring import pipeline
 state = pipeline.init(sys, init_q, init_qd)
 
 # Ray sensor parameters
-sensor_angle = 0  # Initial angle in radians (0 = right direction)
+sensor_angle = 0.0  # Fixed angle in radians (0 = right direction)
 max_ray_distance = 3.0  # Maximum ray distance
 
+# Convert obstacles to JAX arrays for more efficient processing
+obstacle_data = jp.array([[x, y, radius] for x, y, radius, _ in obstacles])
 
-# Function to calculate ray-circle intersection distance
-def ray_distance_to_obstacle(ray_origin, ray_direction, obstacles, walls, max_distance):
+
+# ===== Functional ray distance sensing code =====
+
+def ray_circle_intersection(ray_origin, ray_direction, circle_center, circle_radius):
     """
-    Calculate the distance from ray origin to the nearest obstacle intersection.
+    Calculate intersection distance between ray and circle.
+    Returns distance to intersection (inf if no intersection).
 
     Args:
         ray_origin: [x, y] position of ray origin
         ray_direction: Normalized [dx, dy] direction of ray
-        obstacles: List of [x, y, radius] for each obstacle
-        walls: List of walls as [x1, y1, x2, y2]
+        circle_center: [x, y] position of circle center
+        circle_radius: radius of circle
+
+    Returns:
+        distance: Distance to intersection or inf if no intersection
+    """
+    # Vector from ray origin to circle center
+    to_center = circle_center - ray_origin
+
+    # Project this vector onto ray direction
+    proj_length = jp.dot(to_center, ray_direction)
+
+    # If circle is behind the ray, no intersection
+    no_intersection_behind = proj_length < 0
+
+    # Find closest point on ray to circle center
+    closest_point = ray_origin + proj_length * ray_direction
+
+    # Distance from closest point to circle center
+    dist_to_center = jp.linalg.norm(circle_center - closest_point)
+
+    # If this distance > radius, no intersection
+    no_intersection_distance = dist_to_center > circle_radius
+
+    # Calculate distance from ray origin to intersection point
+    # Using Pythagorean theorem
+    to_intersection = jp.sqrt(jp.maximum(0.0, circle_radius ** 2 - dist_to_center ** 2))
+    distance = proj_length - to_intersection
+
+    # Return inf if no intersection, otherwise the distance
+    return jp.where(
+        no_intersection_behind | no_intersection_distance,
+        jp.inf,
+        jp.maximum(0.0, distance)  # Ensure distance is non-negative
+    )
+
+
+def ray_sensor_reading(ray_origin, ray_direction, obstacles, max_distance):
+    """
+    Calculate the distance from ray origin to the nearest obstacle.
+
+    Args:
+        ray_origin: [x, y] position of ray origin
+        ray_direction: Normalized [dx, dy] direction of ray
+        obstacles: Array of [x, y, radius] for each obstacle
         max_distance: Maximum ray distance to check
 
     Returns:
-        min_distance: Distance to nearest intersection or max_distance if none found
-        hit_point: [x, y] coordinate of intersection or None
-        hit_object: Index of hit obstacle or wall, or None
+        min_distance: Distance to nearest intersection
+        hit_point: [x, y] coordinate of intersection
+        hit_object_idx: Index of hit obstacle, or -1 if none
     """
+    # Initialize with maximum distance
     min_distance = max_distance
-    hit_point = None
-    hit_object = None
+    hit_object_idx = -1
 
-    # Check intersections with obstacles (circles)
-    for i, (x, y, radius, _) in enumerate(obstacles):
-        # Vector from ray origin to obstacle center
-        to_center = jp.array([x, y]) - ray_origin
+    # Function to check each obstacle
+    def check_obstacle(i, min_data):
+        min_dist, obj_idx = min_data
 
-        # Project this vector onto the ray direction
-        proj_length = jp.dot(to_center, ray_direction)
+        # Get obstacle data
+        obstacle = obstacles[i]
+        center = obstacle[:2]
+        radius = obstacle[2]
 
-        # If the obstacle is behind the ray, skip it
-        if proj_length < 0:
-            continue
+        # Calculate intersection distance
+        dist = ray_circle_intersection(ray_origin, ray_direction, center, radius)
 
-        # Find the closest point on the ray to the obstacle center
-        closest_point = ray_origin + proj_length * ray_direction
+        # Update if closer
+        closer = (dist < min_dist) & (dist >= 0.0001)  # Small epsilon to avoid self-intersection
+        new_min_dist = jp.where(closer, dist, min_dist)
+        new_obj_idx = jp.where(closer, i, obj_idx)
 
-        # Calculate the distance from this point to the obstacle center
-        dist_to_center = jp.linalg.norm(jp.array([x, y]) - closest_point)
+        return (new_min_dist, new_obj_idx)
 
-        # If this distance is greater than the radius, no intersection
-        if dist_to_center > radius:
-            continue
+    # Check all obstacles using a loop
+    min_data = (min_distance, hit_object_idx)
+    for i in range(len(obstacles)):
+        min_data = check_obstacle(i, min_data)
 
-        # Calculate the distance from the ray origin to the intersection point
-        # Using Pythagorean theorem
-        to_intersection = jp.sqrt(radius ** 2 - dist_to_center ** 2)
-        distance = proj_length - to_intersection
+    # After checking all obstacles
+    min_distance, hit_object_idx = min_data
 
-        # If this is closer than our current minimum, update
-        if 0 <= distance < min_distance:
-            min_distance = distance
-            hit_point = ray_origin + distance * ray_direction
-            hit_object = f"obstacle_{i}"
+    # Calculate hit point
+    hit_point = ray_origin + min_distance * ray_direction
 
-    # Check intersections with walls (box edges)
-    # Left wall
-    if ray_direction[0] < 0:  # Only check if ray is pointing left
-        t = (-box_size / 2 - ray_origin[0]) / ray_direction[0]
-        if 0 <= t < min_distance:
-            y_intersect = ray_origin[1] + t * ray_direction[1]
-            if -box_size / 2 <= y_intersect <= box_size / 2:
-                min_distance = t
-                hit_point = jp.array([-box_size / 2, y_intersect])
-                hit_object = "left_wall"
+    return min_distance, hit_point, hit_object_idx
 
-    # Right wall
-    if ray_direction[0] > 0:  # Only check if ray is pointing right
-        t = (box_size / 2 - ray_origin[0]) / ray_direction[0]
-        if 0 <= t < min_distance:
-            y_intersect = ray_origin[1] + t * ray_direction[1]
-            if -box_size / 2 <= y_intersect <= box_size / 2:
-                min_distance = t
-                hit_point = jp.array([box_size / 2, y_intersect])
-                hit_object = "right_wall"
 
-    # Bottom wall
-    if ray_direction[1] < 0:  # Only check if ray is pointing down
-        t = (-box_size / 2 - ray_origin[1]) / ray_direction[1]
-        if 0 <= t < min_distance:
-            x_intersect = ray_origin[0] + t * ray_direction[0]
-            if -box_size / 2 <= x_intersect <= box_size / 2:
-                min_distance = t
-                hit_point = jp.array([x_intersect, -box_size / 2])
-                hit_object = "bottom_wall2"
+def cast_ray(puck_pos, puck_radius, obstacles, max_distance, sensor_angle):
+    """
+    Cast a ray from the puck at a fixed angle and get distance reading.
 
-    # Top wall
-    if ray_direction[1] > 0:  # Only check if ray is pointing up
-        t = (box_size / 2 - ray_origin[1]) / ray_direction[1]
-        if 0 <= t < min_distance:
-            x_intersect = ray_origin[0] + t * ray_direction[0]
-            if -box_size / 2 <= x_intersect <= box_size / 2:
-                min_distance = t
-                hit_point = jp.array([x_intersect, box_size / 2])
-                hit_object = "top_wall"
+    Args:
+        puck_pos: [x, y] position of puck center
+        puck_radius: Radius of the puck
+        obstacles: Array of obstacle data [x, y, radius]
+        max_distance: Maximum ray distance
+        sensor_angle: Fixed sensor angle
 
-    return min_distance, hit_point, hit_object
+    Returns:
+        distance: Distance to nearest obstacle or max_distance
+        hit_point: Position of hit
+        ray_dir: Direction of ray
+        ray_origin: Origin of ray
+    """
+    # Fixed ray direction
+    ray_dir = jp.array([jp.cos(sensor_angle), jp.sin(sensor_angle)])
+
+    # Ray starts at edge of puck
+    ray_origin = puck_pos + ray_dir * puck_radius
+
+    # Cast ray
+    distance, hit_point, hit_idx = ray_sensor_reading(
+        ray_origin, ray_dir, obstacles, max_distance)
+
+    return distance, hit_point, ray_dir, ray_origin
 
 
 # Function to simulate with position tracking and ray sensing
@@ -188,41 +222,26 @@ def simulate(state, n_steps=100):
     puck_positions = []
     ray_readings = []  # Store ray sensor readings
     ray_directions = []  # Store ray directions
-    ray_hits = []  # Store ray hit points
-
-    # Get obstacle data for ray casting
-    obstacle_data = [[x, y, radius] for x, y, radius, _ in obstacles]
-    walls = []  # We'll check walls separately
+    ray_hit_points = []  # Store ray hit points
+    ray_origins = []  # Store ray origin points
 
     # JIT-compile the step function
     step_fn = jax.jit(pipeline.step)
 
     for i in range(n_steps):
-        # Get current position and velocity
+        # Get current position
         puck_pos = state.x.pos[0, :2]
-        puck_vel = state.xd.vel[0, :2]
 
-        # Determine ray direction based on velocity if moving
-        vel_mag = jp.linalg.norm(puck_vel)
-        if vel_mag > 0.1:
-            # Use velocity direction for ray
-            ray_dir = puck_vel / vel_mag
-        else:
-            # Use fixed angle if very slow
-            ray_dir = jp.array([jp.cos(sensor_angle), jp.sin(sensor_angle)])
+        # Cast ray from puck at fixed angle
+        distance, hit_point, ray_dir, ray_origin = cast_ray(
+            puck_pos, puck_radius, obstacle_data, max_ray_distance, sensor_angle)
 
-        # Cast ray from the edge of the puck in the ray direction
-        ray_origin = puck_pos + ray_dir * puck_radius
-
-        # Get distance to nearest obstacle
-        distance, hit_point, hit_object = ray_distance_to_obstacle(
-            ray_origin, ray_dir, obstacles, walls, max_ray_distance)
-
-        # Record puck position and ray reading
-        puck_positions.append(puck_pos.tolist())
+        # Record data
+        puck_positions.append(puck_pos)
         ray_readings.append(distance)
         ray_directions.append(ray_dir)
-        ray_hits.append(hit_point)
+        ray_hit_points.append(hit_point)
+        ray_origins.append(ray_origin)
 
         # Take a step
         state = step_fn(sys, state, None)
@@ -240,29 +259,24 @@ def simulate(state, n_steps=100):
 
         states.append(state)
 
-    # Add final position
-    puck_positions.append(state.x.pos[0, :2].tolist())
-
-    # Get final ray reading
+    # Add final position and ray information
     puck_pos = state.x.pos[0, :2]
-    puck_vel = state.xd.vel[0, :2]
-    vel_mag = jp.linalg.norm(puck_vel)
-    if vel_mag > 0.1:
-        ray_dir = puck_vel / vel_mag
-    else:
-        ray_dir = jp.array([jp.cos(sensor_angle), jp.sin(sensor_angle)])
-    ray_origin = puck_pos + ray_dir * puck_radius
-    distance, hit_point, hit_object = ray_distance_to_obstacle(
-        ray_origin, ray_dir, obstacles, walls, max_ray_distance)
+    puck_positions.append(puck_pos)
+
+    # Cast ray for final state
+    distance, hit_point, ray_dir, ray_origin = cast_ray(
+        puck_pos, puck_radius, obstacle_data, max_ray_distance, sensor_angle)
+
     ray_readings.append(distance)
     ray_directions.append(ray_dir)
-    ray_hits.append(hit_point)
+    ray_hit_points.append(hit_point)
+    ray_origins.append(ray_origin)
 
-    return states, puck_positions, ray_readings, ray_directions, ray_hits
+    return states, puck_positions, ray_readings, ray_directions, ray_hit_points, ray_origins
 
 
 # Run the simulation
-states, puck_positions, ray_readings, ray_directions, ray_hits = simulate(state, 500)
+states, puck_positions, ray_readings, ray_directions, ray_hit_points, ray_origins = simulate(state, 500)
 
 # Create an animation of the simulation
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -271,7 +285,7 @@ fig, ax = plt.subplots(figsize=(10, 8))
 ax.set_xlim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_ylim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_aspect('equal')
-ax.set_title('2D Puck Simulation with Ray Distance Sensor')
+ax.set_title('2D Puck Simulation with Fixed-Angle Ray Sensor')
 ax.grid(True)
 
 # Draw the box
@@ -332,21 +346,20 @@ def update(frame, trail_length=20):
 
     # Update ray sensor visualization
     if frame < len(ray_directions):
-        ray_dir = ray_directions[frame]
+        ray_origin = ray_origins[frame]
+        ray_hit = ray_hit_points[frame]
         ray_dist = ray_readings[frame]
-        ray_origin = np.array([puck_x, puck_y]) + ray_dir * puck_radius
 
-        # If we have a hit point, use it directly
-        if ray_hits[frame] is not None:
-            ray_end_pt = ray_hits[frame]
+        if ray_dist < max_ray_distance:
             ray_line.set_data(
-                [ray_origin[0], ray_end_pt[0]],
-                [ray_origin[1], ray_end_pt[1]]
+                [ray_origin[0], ray_hit[0]],
+                [ray_origin[1], ray_hit[1]]
             )
-            ray_end.set_data([ray_end_pt[0]], [ray_end_pt[1]])
+            ray_end.set_data([ray_hit[0]], [ray_hit[1]])
         else:
-            # Otherwise use the max distance
-            ray_end_pt = ray_origin + ray_dir * ray_dist
+            # Use max distance if no hit
+            ray_dir = ray_directions[frame]
+            ray_end_pt = ray_origin + ray_dir * max_ray_distance
             ray_line.set_data(
                 [ray_origin[0], ray_end_pt[0]],
                 [ray_origin[1], ray_end_pt[1]]
