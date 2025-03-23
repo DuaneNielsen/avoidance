@@ -92,7 +92,6 @@ from brax.spring import pipeline
 state = pipeline.init(sys, init_q, init_qd)
 
 # Ray sensor parameters
-sensor_angle = 0.0  # Fixed angle in radians (0 = right direction)
 max_ray_distance = 3.0  # Maximum ray distance
 
 # Convert obstacles to JAX arrays for more efficient processing
@@ -241,12 +240,24 @@ def simulate(state, n_steps=100):
     step_fn = jax.jit(pipeline.step)
 
     for i in range(n_steps):
-        # Get current position
+        # Get current position and orientation
         puck_pos = state.x.pos[0, :2]
 
-        # Cast ray from puck at fixed angle
-        distance, hit_point, ray_dir, ray_origin = cast_ray(
-            puck_pos, puck_radius, obstacle_data, max_ray_distance, sensor_angle)
+        # Extract the quaternion (w, x, y, z) from the state
+        quat = state.x.rot[0]  # Quaternion for the puck
+
+        # Convert quaternion to rotation angle around z-axis
+        angle = 2 * jp.arctan2(quat[3], quat[0])
+
+        # Calculate ray direction based on puck's orientation
+        ray_dir = jp.array([jp.cos(angle), jp.sin(angle)])
+
+        # Ray starts at edge of puck in the direction of orientation
+        ray_origin = puck_pos + ray_dir * puck_radius
+
+        # Cast ray
+        distance, hit_point, hit_idx = ray_sensor_reading(
+            ray_origin, ray_dir, obstacle_data, max_ray_distance)
 
         # Record data
         puck_positions.append(puck_pos)
@@ -276,8 +287,12 @@ def simulate(state, n_steps=100):
     puck_positions.append(puck_pos)
 
     # Cast ray for final state
-    distance, hit_point, ray_dir, ray_origin = cast_ray(
-        puck_pos, puck_radius, obstacle_data, max_ray_distance, sensor_angle)
+    quat = state.x.rot[0]
+    angle = 2 * jp.arctan2(quat[3], quat[0])
+    ray_dir = jp.array([jp.cos(angle), jp.sin(angle)])
+    ray_origin = puck_pos + ray_dir * puck_radius
+    distance, hit_point, hit_idx = ray_sensor_reading(
+        ray_origin, ray_dir, obstacle_data, max_ray_distance)
 
     ray_readings.append(distance)
     ray_directions.append(ray_dir)
@@ -297,7 +312,7 @@ fig, ax = plt.subplots(figsize=(10, 8))
 ax.set_xlim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_ylim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_aspect('equal')
-ax.set_title('2D Puck Simulation with Fixed-Angle Ray Sensor and Rotation Indicator')
+ax.set_title('2D Puck Simulation with Rotating Ray Sensor')
 ax.grid(True)
 
 # Draw the box
