@@ -28,7 +28,7 @@ mjcf_string = """
   <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
   <option timestep="0.005" gravity="0 0 0" />
   <custom>
-    <numeric data="0.5" name="elasticity"/>
+    <numeric data="1.0" name="elasticity"/>
     <numeric data="0.0" name="ang_damping"/>
     <numeric data="0.0" name="vel_damping"/>
   </custom>
@@ -93,6 +93,9 @@ state = pipeline.init(sys, init_q, init_qd)
 
 # Ray sensor parameters
 max_ray_distance = 3.0  # Maximum ray distance
+
+# Define multiple ray angles (relative to puck orientation)
+ray_angles = [0.0, 2 * jp.pi / 20, -2 * jp.pi / 20]
 
 # Convert obstacles to JAX arrays for more efficient processing
 obstacle_data = jp.array([[x, y, radius] for x, y, radius, _ in obstacles])
@@ -197,44 +200,48 @@ def ray_sensor_reading(ray_origin, ray_direction, obstacles, max_distance):
     return min_distance, hit_point, hit_object_idx
 
 
-def cast_ray(puck_pos, puck_radius, obstacles, max_distance, sensor_angle):
+def cast_rays(puck_pos, puck_radius, puck_angle, obstacles, max_distance, ray_angles):
     """
-    Cast a ray from the puck at a fixed angle and get distance reading.
+    Cast multiple rays from the puck at different angles and get distance readings.
 
     Args:
         puck_pos: [x, y] position of puck center
         puck_radius: Radius of the puck
+        puck_angle: Current orientation angle of the puck
         obstacles: Array of obstacle data [x, y, radius]
         max_distance: Maximum ray distance
-        sensor_angle: Fixed sensor angle
+        ray_angles: List of angles (relative to puck orientation) for ray sensors
 
     Returns:
-        distance: Distance to nearest obstacle or max_distance
-        hit_point: Position of hit
-        ray_dir: Direction of ray
-        ray_origin: Origin of ray
+        results: List of (distance, hit_point, ray_dir, ray_origin) for each ray
     """
-    # Fixed ray direction
-    ray_dir = jp.array([jp.cos(sensor_angle), jp.sin(sensor_angle)])
+    results = []
 
-    # Ray starts at edge of puck
-    ray_origin = puck_pos + ray_dir * puck_radius
+    for angle_offset in ray_angles:
+        # Calculate absolute ray angle
+        ray_angle = puck_angle + angle_offset
 
-    # Cast ray
-    distance, hit_point, hit_idx = ray_sensor_reading(
-        ray_origin, ray_dir, obstacles, max_distance)
+        # Ray direction
+        ray_dir = jp.array([jp.cos(ray_angle), jp.sin(ray_angle)])
 
-    return distance, hit_point, ray_dir, ray_origin
+        # Ray starts at edge of puck
+        ray_origin = puck_pos + ray_dir * puck_radius
+
+        # Cast ray
+        distance, hit_point, hit_idx = ray_sensor_reading(
+            ray_origin, ray_dir, obstacles, max_distance)
+
+        # Store results
+        results.append((distance, hit_point, ray_dir, ray_origin))
+
+    return results
 
 
 # Function to simulate with position tracking and ray sensing
 def simulate(state, n_steps=100):
     states = [state]
     puck_positions = []
-    ray_readings = []  # Store ray sensor readings
-    ray_directions = []  # Store ray directions
-    ray_hit_points = []  # Store ray hit points
-    ray_origins = []  # Store ray origin points
+    all_ray_results = []  # List to store ray results for each frame
 
     # JIT-compile the step function
     step_fn = jax.jit(pipeline.step)
@@ -247,24 +254,21 @@ def simulate(state, n_steps=100):
         quat = state.x.rot[0]  # Quaternion for the puck
 
         # Convert quaternion to rotation angle around z-axis
-        angle = 2 * jp.arctan2(quat[3], quat[0])
+        puck_angle = 2 * jp.arctan2(quat[3], quat[0])
 
-        # Calculate ray direction based on puck's orientation
-        ray_dir = jp.array([jp.cos(angle), jp.sin(angle)])
-
-        # Ray starts at edge of puck in the direction of orientation
-        ray_origin = puck_pos + ray_dir * puck_radius
-
-        # Cast ray
-        distance, hit_point, hit_idx = ray_sensor_reading(
-            ray_origin, ray_dir, obstacle_data, max_ray_distance)
+        # Cast multiple rays
+        ray_results = cast_rays(
+            puck_pos,
+            puck_radius,
+            puck_angle,
+            obstacle_data,
+            max_ray_distance,
+            ray_angles
+        )
 
         # Record data
         puck_positions.append(puck_pos)
-        ray_readings.append(distance)
-        ray_directions.append(ray_dir)
-        ray_hit_points.append(hit_point)
-        ray_origins.append(ray_origin)
+        all_ray_results.append(ray_results)
 
         # Take a step
         state = step_fn(sys, state, None)
@@ -276,7 +280,7 @@ def simulate(state, n_steps=100):
             ),
             xd=state.xd.replace(
                 vel=state.xd.vel.at[:, 2].set(0.0),
-                ang=state.xd.ang.at[:].set(0.0)
+                ang=state.xd.ang.at[:, :2].set(0.0)  # Keep z-axis rotation
             )
         )
 
@@ -286,24 +290,27 @@ def simulate(state, n_steps=100):
     puck_pos = state.x.pos[0, :2]
     puck_positions.append(puck_pos)
 
-    # Cast ray for final state
+    # Cast rays for final state
     quat = state.x.rot[0]
-    angle = 2 * jp.arctan2(quat[3], quat[0])
-    ray_dir = jp.array([jp.cos(angle), jp.sin(angle)])
-    ray_origin = puck_pos + ray_dir * puck_radius
-    distance, hit_point, hit_idx = ray_sensor_reading(
-        ray_origin, ray_dir, obstacle_data, max_ray_distance)
+    puck_angle = 2 * jp.arctan2(quat[3], quat[0])
+    ray_results = cast_rays(
+        puck_pos,
+        puck_radius,
+        puck_angle,
+        obstacle_data,
+        max_ray_distance,
+        ray_angles
+    )
+    all_ray_results.append(ray_results)
 
-    ray_readings.append(distance)
-    ray_directions.append(ray_dir)
-    ray_hit_points.append(hit_point)
-    ray_origins.append(ray_origin)
-
-    return states, puck_positions, ray_readings, ray_directions, ray_hit_points, ray_origins
+    return states, puck_positions, all_ray_results
 
 
 # Run the simulation
-states, puck_positions, ray_readings, ray_directions, ray_hit_points, ray_origins = simulate(state, 500)
+states, puck_positions, all_ray_results = simulate(state, 500)
+
+# Define line styles for different rays - using same color for all rays
+ray_line_styles = ['-', '--', ':']  # Different line styles for each ray
 
 # Create an animation of the simulation
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -312,7 +319,7 @@ fig, ax = plt.subplots(figsize=(10, 8))
 ax.set_xlim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_ylim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_aspect('equal')
-ax.set_title('2D Puck Simulation with Rotating Ray Sensor')
+ax.set_title('2D Puck Simulation with Multiple Ray Sensors')
 ax.grid(True)
 
 # Draw the box
@@ -333,9 +340,15 @@ puck = Circle((puck_positions[0][0], puck_positions[0][1]),
               puck_radius, facecolor='purple', edgecolor='black')
 ax.add_patch(puck)
 
-# Initialize ray sensor visualization
-ray_line, = ax.plot([], [], 'y-', lw=2)  # Yellow ray
-ray_end, = ax.plot([], [], 'yo', ms=6)  # Yellow endpoint
+# Initialize ray sensor visualization (now three rays)
+ray_lines = []
+ray_ends = []
+
+for i, style in enumerate(ray_line_styles):
+    line, = ax.plot([], [], 'y' + style, lw=2)  # Yellow ray with different line styles
+    end, = ax.plot([], [], 'yo', ms=6)  # Yellow endpoint
+    ray_lines.append(line)
+    ray_ends.append(end)
 
 # Initialize velocity vector line
 vel_line, = ax.plot([], [], 'r-', lw=2)
@@ -347,10 +360,23 @@ rotation_line, = ax.plot([], [], 'g-', lw=3)  # Green line from center to edge
 # Add trail for the puck
 puck_trail, = ax.plot([], [], '-', color='blue', alpha=0.5, linewidth=1)
 
-# Add text for frame count, distance reading, and angular velocity
+# Add text for frame count and ray distances
 frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, verticalalignment='top')
-distance_text = ax.text(0.05, 0.90, '', transform=ax.transAxes, verticalalignment='top')
-angular_vel_text = ax.text(0.05, 0.85, '', transform=ax.transAxes, verticalalignment='top')
+distance_texts = []
+for i in range(3):  # Create text for each ray
+    text = ax.text(0.05, 0.90 - i * 0.05, '', transform=ax.transAxes, verticalalignment='top')
+    distance_texts.append(text)
+angular_vel_text = ax.text(0.05, 0.75, '', transform=ax.transAxes, verticalalignment='top')
+
+# Add a legend for ray styles
+from matplotlib.lines import Line2D
+
+legend_elements = [
+    Line2D([0], [0], color='y', linestyle=ray_line_styles[0], lw=2, label='Forward Ray'),
+    Line2D([0], [0], color='y', linestyle=ray_line_styles[1], lw=2, label='Left Ray (+120°)'),
+    Line2D([0], [0], color='y', linestyle=ray_line_styles[2], lw=2, label='Right Ray (-120°)')
+]
+ax.legend(handles=legend_elements, loc='upper right')
 
 
 # Animation update function
@@ -375,27 +401,36 @@ def update(frame, trail_length=20):
     vel_line.set_data([puck_x, puck_x + vx * scale], [puck_y, puck_y + vy * scale])
     arrowhead.set_data([puck_x + vx * scale], [puck_y + vy * scale])
 
-    # Update ray sensor visualization
-    if frame < len(ray_directions):
-        ray_origin = ray_origins[frame]
-        ray_hit = ray_hit_points[frame]
-        ray_dist = ray_readings[frame]
+    # Update all ray sensor visualizations
+    if frame < len(all_ray_results):
+        ray_results = all_ray_results[frame]
 
-        if ray_dist < max_ray_distance:
-            ray_line.set_data(
-                [ray_origin[0], ray_hit[0]],
-                [ray_origin[1], ray_hit[1]]
-            )
-            ray_end.set_data([ray_hit[0]], [ray_hit[1]])
-        else:
-            # Use max distance if no hit
-            ray_dir = ray_directions[frame]
-            ray_end_pt = ray_origin + ray_dir * max_ray_distance
-            ray_line.set_data(
-                [ray_origin[0], ray_end_pt[0]],
-                [ray_origin[1], ray_end_pt[1]]
-            )
-            ray_end.set_data([ray_end_pt[0]], [ray_end_pt[1]])
+        for i, ((ray_dist, ray_hit, ray_dir, ray_origin), line, end, text) in enumerate(
+                zip(ray_results, ray_lines, ray_ends, distance_texts)):
+
+            # Update ray visualization
+            if ray_dist < max_ray_distance:
+                line.set_data(
+                    [ray_origin[0], ray_hit[0]],
+                    [ray_origin[1], ray_hit[1]]
+                )
+                end.set_data([ray_hit[0]], [ray_hit[1]])
+            else:
+                # Use max distance if no hit
+                ray_end_pt = ray_origin + ray_dir * max_ray_distance
+                line.set_data(
+                    [ray_origin[0], ray_end_pt[0]],
+                    [ray_origin[1], ray_end_pt[1]]
+                )
+                end.set_data([ray_end_pt[0]], [ray_end_pt[1]])
+
+            # Update distance text
+            if i == 0:
+                text.set_text(f'Forward Ray: {ray_dist:.2f}')
+            elif i == 1:
+                text.set_text(f'Left Ray: {ray_dist:.2f}')
+            else:
+                text.set_text(f'Right Ray: {ray_dist:.2f}')
 
     # Update rotation indicator line using quaternion orientation
     if frame < len(states):
@@ -423,18 +458,16 @@ def update(frame, trail_length=20):
     puck_trail.set_data([p[0] for p in puck_positions[trail_start:trail_end]],
                         [p[1] for p in puck_positions[trail_start:trail_end]])
 
-    # Update text information
+    # Update frame text
     frame_text.set_text(f'Frame: {frame}')
-    if frame < len(ray_readings):
-        distance_text.set_text(f'Ray Distance: {ray_readings[frame]:.2f}')
 
     # Add angular velocity text
     if frame < len(states):
         wz = state.xd.ang[0, 2]
         angular_vel_text.set_text(f'Angular Velocity: {wz:.2f} rad/s')
 
-    return [puck, vel_line, arrowhead, puck_trail, ray_line, ray_end, rotation_line,
-            frame_text, distance_text, angular_vel_text]
+    return [puck, vel_line, arrowhead, puck_trail, rotation_line,
+            frame_text, angular_vel_text] + ray_lines + ray_ends + distance_texts
 
 
 # Create the animation
