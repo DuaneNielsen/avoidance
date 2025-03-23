@@ -71,7 +71,19 @@ first_obstacle = obstacles[0]
 direction = jp.array([first_obstacle[0], first_obstacle[1]]) - jp.array([puck_pos[0], puck_pos[1]])
 direction = direction / jp.sqrt(jp.sum(direction ** 2))  # Normalize
 speed = 5.0
-init_qd = jp.array([direction[0] * speed, direction[1] * speed, 0.0, 0.0, 0.0, 0.0])
+
+# Add angular velocity to the puck (rotating around z-axis)
+angular_speed = 2.0  # radians per second
+
+# Initial velocities: [vx, vy, vz, wx, wy, wz]
+init_qd = jp.array([
+    direction[0] * speed,  # vx
+    direction[1] * speed,  # vy
+    0.0,  # vz
+    0.0,  # wx
+    0.0,  # wy
+    angular_speed  # wz - angular velocity around z-axis
+])
 
 # Choose the physics pipeline
 from brax.spring import pipeline
@@ -285,7 +297,7 @@ fig, ax = plt.subplots(figsize=(10, 8))
 ax.set_xlim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_ylim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_aspect('equal')
-ax.set_title('2D Puck Simulation with Fixed-Angle Ray Sensor')
+ax.set_title('2D Puck Simulation with Fixed-Angle Ray Sensor and Rotation Indicator')
 ax.grid(True)
 
 # Draw the box
@@ -314,12 +326,16 @@ ray_end, = ax.plot([], [], 'yo', ms=6)  # Yellow endpoint
 vel_line, = ax.plot([], [], 'r-', lw=2)
 arrowhead, = ax.plot([], [], 'r.', ms=10)
 
+# Initialize rotation indicator line (to show angular velocity)
+rotation_line, = ax.plot([], [], 'g-', lw=3)  # Green line from center to edge
+
 # Add trail for the puck
 puck_trail, = ax.plot([], [], '-', color='blue', alpha=0.5, linewidth=1)
 
-# Add text for frame count and distance reading
+# Add text for frame count, distance reading, and angular velocity
 frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, verticalalignment='top')
 distance_text = ax.text(0.05, 0.90, '', transform=ax.transAxes, verticalalignment='top')
+angular_vel_text = ax.text(0.05, 0.85, '', transform=ax.transAxes, verticalalignment='top')
 
 
 # Animation update function
@@ -366,6 +382,24 @@ def update(frame, trail_length=20):
             )
             ray_end.set_data([ray_end_pt[0]], [ray_end_pt[1]])
 
+    # Update rotation indicator line using quaternion orientation
+    if frame < len(states):
+        # Extract the quaternion (w, x, y, z) from the state
+        quat = state.x.rot[0]  # Quaternion for the puck
+
+        # We need to convert the quaternion to a rotation angle in 2D
+        # In a 2D case, we care about rotation around z-axis
+        # Quaternion to rotation angle around z-axis can be found through:
+        # 2 * atan2(z, w)
+        angle = 2 * np.arctan2(quat[3], quat[0])
+
+        # Calculate the point on the edge of the puck
+        edge_x = puck_x + puck_radius * np.cos(angle)
+        edge_y = puck_y + puck_radius * np.sin(angle)
+
+        # Update the rotation indicator line
+        rotation_line.set_data([puck_x, edge_x], [puck_y, edge_y])
+
     # Update trail with limited positions
     trail_start = max(0, frame + 1 - trail_length)
     trail_end = frame + 1
@@ -379,7 +413,13 @@ def update(frame, trail_length=20):
     if frame < len(ray_readings):
         distance_text.set_text(f'Ray Distance: {ray_readings[frame]:.2f}')
 
-    return [puck, vel_line, arrowhead, puck_trail, ray_line, ray_end, frame_text, distance_text]
+    # Add angular velocity text
+    if frame < len(states):
+        wz = state.xd.ang[0, 2]
+        angular_vel_text.set_text(f'Angular Velocity: {wz:.2f} rad/s')
+
+    return [puck, vel_line, arrowhead, puck_trail, ray_line, ray_end, rotation_line,
+            frame_text, distance_text, angular_vel_text]
 
 
 # Create the animation
