@@ -123,8 +123,7 @@ width, height = 480, 480  # swapped to match the XML sizes
 
 # Prepare data recording
 time_points = []
-rangefinder0_data = []
-rangefinder1_data = []
+rangefinder_data = []
 joint_angle_data = []
 
 # Reset simulation
@@ -164,8 +163,7 @@ with mujoco.Renderer(mj_model, height, width) as renderer:
 
         # Record data
         time_points.append(mj_data.time)
-        rangefinder0_data.append(mj_data.sensor('rangefinder0').data.item())
-        rangefinder1_data.append(mj_data.sensor('rangefinder1').data.item())
+        rangefinder_data.append([mj_data.sensor(f'rangefinder{i}').data.item() for i in range(num_sensors)])
         joint_angle_data.append(mj_data.qpos[0])
 
         # Render the frame
@@ -183,8 +181,10 @@ plt.figure(figsize=(12, 8))
 #
 # Plot rangefinder readings
 plt.subplot(2, 1, 1)
-plt.plot(time_points, rangefinder0_data, label='Rangefinder 0 (Red)', color='red', linewidth=2)
-plt.plot(time_points, rangefinder1_data, label='Rangefinder 1 (Blue)', color='blue', linewidth=2)
+rangefinder_data = np.array(rangefinder_data)
+for i in range(num_sensors):
+    plt.plot(time_points, rangefinder_data[:, i], label=f'Rangefinder {i}', linewidth=2)
+
 plt.xlabel('Time (s)')
 plt.ylabel('Distance (m)')
 plt.title('Rangefinder Readings')
