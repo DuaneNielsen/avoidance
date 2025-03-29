@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import mujoco
 from mujoco import mjx
 import mediapy as media
+from math import sin, cos
 
 xml = """
 <mujoco model="simple_2d">
@@ -20,14 +21,17 @@ xml = """
   </option>
 
   <default>
-    <geom type="box" pos="0 0 0" size=".1 .15 .05" mass="0.1"/>
+    <geom type="box" pos="0 0 0" size=".168 .1 .05" mass="0.1"/>
     <joint damping="0.25" stiffness="0.0"/>
   </default>
   
   <worldbody>
 """
 
-xml += """
+sensor_angle = 0.4
+num_sensors = 5
+
+xml += f"""
     <site name="origin"/>
     <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
 
@@ -36,17 +40,26 @@ xml += """
       <joint name="slidex" type="slide" axis="1. 0. 0." range="0 1"/>
       <joint name="slidey" type="slide" axis="0. 1. 0." range="0 1"/>
       <joint name="hinge0" type="hinge" axis="0 0 1."/>
-      <site name="site_rangefinder0" pos="0.3 0 0" size="0.02" rgba="1 0 0 1" zaxis="1 0 0"/>
-      <site name="site_rangefinder1" pos="-0.3 0 0" size="0.02" rgba="0 0 1 1" zaxis="-1 0 0"/>
-      <geom/>
+      <frame pos="0 0.1 0" quat="-1 1 0 0">
+      """
+
+for i, theta in enumerate(np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)):
+    xml += f"""
+              <site name="site_rangefinder{i}" quat="{cos(theta/2)} 0 {sin(theta/2)} 0" size="0.02" rgba="1 0 0 1"/>
+            """
+
+xml += f"""
+      </frame>
+      <geom type="box" pos="0 0 0" size=".168 .1 .05" mass="0.1"/>
     </body>
 """
+
 
 # Define obstacles - each is [x, y, radius]
 obstacles = [
     [0.2, 0.3, 0.1],
     [-0.5, 0.7, 0.07],
-    [0.7, -0.5, 0.06]
+    [0.7, -0.5, 0.06],
 ]
 
 
@@ -62,8 +75,14 @@ xml += """
   </worldbody>
 
   <sensor>
-    <rangefinder name="rangefinder0" site="site_rangefinder0"/>
-    <rangefinder name="rangefinder1" site="site_rangefinder1"/>
+  """
+
+for i in range(num_sensors):
+    xml += f"""
+        <rangefinder name="rangefinder{i}" site="site_rangefinder{i}"/>
+        """
+
+xml += """
   </sensor>
 
   <actuator>
@@ -144,10 +163,10 @@ with mujoco.Renderer(mj_model, height, width) as renderer:
         mj_data = mjx.get_data(mj_model, mjx_data)
 
         # Record data
-        # time_points.append(mj_data.time)
-        # rangefinder0_data.append(mj_data.sensor('rangefinder0').data.item())
-        # rangefinder1_data.append(mj_data.sensor('rangefinder1').data.item())
-        # joint_angle_data.append(mj_data.qpos[0])
+        time_points.append(mj_data.time)
+        rangefinder0_data.append(mj_data.sensor('rangefinder0').data.item())
+        rangefinder1_data.append(mj_data.sensor('rangefinder1').data.item())
+        joint_angle_data.append(mj_data.qpos[0])
 
         # Render the frame
         renderer.update_scene(mj_data, camera=cam, scene_option=scene_option)
@@ -162,15 +181,15 @@ print(f"Video saved to {output_filename}")
 # Plot rangefinder readings and joint position
 plt.figure(figsize=(12, 8))
 #
-# # Plot rangefinder readings
-# plt.subplot(2, 1, 1)
-# plt.plot(time_points, rangefinder0_data, label='Rangefinder 0 (Red)', color='red', linewidth=2)
-# plt.plot(time_points, rangefinder1_data, label='Rangefinder 1 (Blue)', color='blue', linewidth=2)
-# plt.xlabel('Time (s)')
-# plt.ylabel('Distance (m)')
-# plt.title('Rangefinder Readings')
-# plt.legend()
-# plt.grid(True)
+# Plot rangefinder readings
+plt.subplot(2, 1, 1)
+plt.plot(time_points, rangefinder0_data, label='Rangefinder 0 (Red)', color='red', linewidth=2)
+plt.plot(time_points, rangefinder1_data, label='Rangefinder 1 (Blue)', color='blue', linewidth=2)
+plt.xlabel('Time (s)')
+plt.ylabel('Distance (m)')
+plt.title('Rangefinder Readings')
+plt.legend()
+plt.grid(True)
 #
 # # Plot joint angle
 # plt.subplot(2, 1, 2)
@@ -180,8 +199,8 @@ plt.figure(figsize=(12, 8))
 # plt.title('Joint Angle')
 # plt.grid(True)
 #
-# plt.tight_layout()
-# plt.savefig('rangefinder_data.png')
-# plt.show()
-#
-# print("Simulation complete!")
+plt.tight_layout()
+plt.savefig('rangefinder_data.png')
+plt.show()
+
+print("Simulation complete!")
