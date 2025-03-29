@@ -36,6 +36,8 @@ xml += """
       <joint name="slidex" type="slide" axis="1. 0. 0." range="0 1"/>
       <joint name="slidey" type="slide" axis="0. 1. 0." range="0 1"/>
       <joint name="hinge0" type="hinge" axis="0 0 1."/>
+      <site name="site_rangefinder0" pos="0.3 0 0" size="0.02" rgba="1 0 0 1" zaxis="1 0 0"/>
+      <site name="site_rangefinder1" pos="-0.3 0 0" size="0.02" rgba="0 0 1 1" zaxis="-1 0 0"/>
       <geom/>
     </body>
 """
@@ -59,6 +61,10 @@ for i, (x, y, radius) in enumerate(obstacles):
 xml += """    
   </worldbody>
 
+  <sensor>
+    <rangefinder name="rangefinder0" site="site_rangefinder0"/>
+    <rangefinder name="rangefinder1" site="site_rangefinder1"/>
+  </sensor>
 
   <actuator>
     <position name="rotation_control" joint="hinge0" kp="10" ctrlrange="-3.14 3.14"/>
