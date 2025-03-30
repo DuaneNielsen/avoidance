@@ -69,15 +69,22 @@ def apply_thrust(state, thrust_x, thrust_y):
 
 
 def run_simulation(num_steps=500, render_every=5):
-    """Run the simulation manually by directly updating position"""
+    """Run the simulation with simplified straight-line movement"""
     states = []
     curr_state = globals()['state']  # Get the current state from globals
 
     # Create position and velocity arrays for manual movement
-    position = jp.array([0.0, 0.0, 0.1])
+    position = jp.array([-5.0, 0.0, 0.1])  # Start from left side
     velocity = jp.array([0.0, 0.0, 0.0])
 
     # Store initial state
+    # Update the initial state with our starting position
+    new_pos = curr_state.x.pos.at[0].set(position)
+    new_vel = curr_state.xd.vel.at[0].set(velocity)
+    curr_state = curr_state.replace(
+        x=curr_state.x.replace(pos=new_pos),
+        xd=curr_state.xd.replace(vel=new_vel)
+    )
     states.append(curr_state)
 
     # Display initial position
@@ -85,24 +92,14 @@ def run_simulation(num_steps=500, render_every=5):
 
     # Simulation loop
     for i in range(1, num_steps):
-        # Apply thrust based on pattern
-        thrust_x = 0.0
-        thrust_y = 0.0
-
-        # Simple automated thrust pattern to demonstrate movement
-        if i % 100 < 25:
-            thrust_x = 0.1  # Right
-        elif i % 100 < 50:
-            thrust_y = 0.1  # Up
-        elif i % 100 < 75:
-            thrust_x = -0.1  # Left
-        else:
-            thrust_y = -0.1  # Down
+        # Apply constant thrust to the right
+        thrust_x = 0.1  # Constant thrust to the right
+        thrust_y = 0.0  # No vertical movement
 
         # Update velocity based on thrust
         velocity = jp.array([velocity[0] + thrust_x, velocity[1] + thrust_y, 0.0])
 
-        # Add damping to prevent infinite acceleration
+        # Add slight damping to prevent infinite acceleration
         velocity = velocity * 0.98
 
         # Update position based on velocity
@@ -136,11 +133,11 @@ def run_simulation(num_steps=500, render_every=5):
 
 def visualize_simulation(states, env):
     """Create visualization of the puck's movement"""
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(12, 6))
     plt.xlim([-6, 6])
-    plt.ylim([-6, 6])
+    plt.ylim([-3, 3])
     plt.grid(True)
-    plt.title('Controllable Puck Simulation (XY Plane)')
+    plt.title('Controllable Puck Simulation (Straight Line)')
 
     # Create patch for the puck
     puck = Circle(xy=(0, 0), radius=0.3, color='blue', alpha=0.7)
@@ -201,16 +198,7 @@ def visualize_simulation(states, env):
         # Update thrust indicators
         thrust_n, thrust_e, thrust_s, thrust_w = thrust_indicators
 
-        # North thruster (y+)
-        if y_vel > 0.05:
-            thrust_n.set_alpha(min(1.0, y_vel))
-            thrust_n.set_xy([float(pos[0]) - 0.025, float(pos[1])])
-            thrust_n.set_width(0.05)
-            thrust_n.set_height(0.3)
-        else:
-            thrust_n.set_alpha(0)
-
-        # East thruster (x+)
+        # East thruster (x+) - Only this will be active
         if x_vel > 0.05:
             thrust_e.set_alpha(min(1.0, x_vel))
             thrust_e.set_xy([float(pos[0]) - 0.3, float(pos[1]) - 0.025])
@@ -219,23 +207,10 @@ def visualize_simulation(states, env):
         else:
             thrust_e.set_alpha(0)
 
-        # South thruster (y-)
-        if y_vel < -0.05:
-            thrust_s.set_alpha(min(1.0, -y_vel))
-            thrust_s.set_xy([float(pos[0]) - 0.025, float(pos[1]) - 0.3])
-            thrust_s.set_width(0.05)
-            thrust_s.set_height(0.3)
-        else:
-            thrust_s.set_alpha(0)
-
-        # West thruster (x-)
-        if x_vel < -0.05:
-            thrust_w.set_alpha(min(1.0, -x_vel))
-            thrust_w.set_xy([float(pos[0]), float(pos[1]) - 0.025])
-            thrust_w.set_width(0.3)
-            thrust_w.set_height(0.05)
-        else:
-            thrust_w.set_alpha(0)
+        # Set others to invisible
+        thrust_n.set_alpha(0)
+        thrust_s.set_alpha(0)
+        thrust_w.set_alpha(0)
 
         return [puck] + trail_lines + thrust_indicators
 

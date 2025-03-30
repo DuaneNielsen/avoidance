@@ -54,11 +54,21 @@ mjcf_string = """
     <numeric data="0.0" name="ang_damping"/>
     <numeric data="0.0" name="vel_damping"/>
   </custom>
+  <asset>
+    <!-- Define materials -->
+    <material name="red" rgba="1 0 0 1"/>
+    <material name="green" rgba="0 1 0 1"/>
+    <material name="blue" rgba="0 0 1 1"/>
+    <material name="yellow" rgba="1 1 0 1"/>
+    <material name="gray" rgba="0.5 0.5 0.5 0.5"/>
+  </asset>
+
   <worldbody>
     <!-- The puck -->
     <body name="puck" pos="{0} {1} {2}">
       <joint type="free" name="puck_joint"/>
       <geom name="puck_geom" type="sphere" size="{3}" mass="1" rgba="0.7 0.2 0.8 1"/>
+      <site name="site_rangefinder0" pos="{3} 0. 0."/>
     </body>
 """.format(puck_pos[0], puck_pos[1], puck_pos[2], puck_radius)
 
@@ -67,7 +77,7 @@ for i, (x, y, radius, color) in enumerate(obstacles):
     mjcf_string += """
     <!-- Obstacle {0} -->
     <geom name="obstacle_{0}" type="cylinder" pos="{1} {2} 0" 
-          size="{3} 0.0001" rgba="{4}" contype="1" conaffinity="1"/>
+          size="{3} 0.0001" rgba="{4}" contype="1" conaffinity="1" material="red"/>
 """.format(i, x, y, radius, color)
 
 # <geom name="floor" type="box" pos="0 0 -{3}" size="{0} {0} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
@@ -75,14 +85,23 @@ for i, (x, y, radius, color) in enumerate(obstacles):
 mjcf_string += """
     <!-- Walls of the box -->
     
-    <geom name="left_wall" type="box" pos="-{1} 0 0" size="{3} {1} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
-    <geom name="right_wall" type="box" pos="{1} 0 0" size="{3} {1} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
-    <geom name="front_wall" type="box" pos="0 -{1} 0" size="{1} {3} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
-    <geom name="back_wall" type="box" pos="0 {1} 0" size="{1} {3} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1"/>
+    <geom name="left_wall" type="box" pos="-{1} 0 0" size="{3} {1} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1" material="gray"/>
+    <geom name="right_wall" type="box" pos="{1} 0 0" size="{3} {1} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1" material="gray"/>
+    <geom name="front_wall" type="box" pos="0 -{1} 0" size="{1} {3} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1" material="gray"/>
+    <geom name="back_wall" type="box" pos="0 {1} 0" size="{1} {3} {3}" rgba="0.8 0.8 0.8 1" conaffinity="1" material="gray"/>
     """.format(box_size, box_size / 2, box_size / 2, 0.01)
 
 mjcf_string += """
   </worldbody>
+"""
+
+mjcf_string += """
+  <sensor>
+    <rangefinder name="rangefinder0" site="site_rangefinder0"/>
+  </sensor>
+"""
+
+mjcf_string += """
 </mujoco>
 """
 
@@ -99,9 +118,10 @@ mjx_data = mjx.put_data(mj_model, mj_data)
 print(mj_data.qpos, type(mj_data.qpos))
 print(mjx_data.qpos, type(mjx_data.qpos), mjx_data.qpos.devices())
 
-# enable joint visualization option:
+# enable joint and rangefinder visualization option:
 scene_option = mujoco.MjvOption()
 scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
+scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
 
 duration = 3.8  # (seconds)
 framerate = 60  # (Hz)
@@ -135,15 +155,15 @@ while mjx_data.time < duration:
 # media.show_video(frames, fps=framerate)
 media.write_video('./puck_in_a_box_1.mp4', frames)
 
-# rng = jax.random.PRNGKey(0)
-# rng = jax.random.split(rng, 4096)
-# batch = jax.vmap(lambda rng: mjx_data.replace(qpos=jax.random.uniform(rng, (1,))))(rng)
-#
-# jit_step = jax.jit(jax.vmap(mjx.step, in_axes=(None, 0)))
-# batch = jit_step(mjx_model, batch)
-#
-# print(batch.qpos)
-#
-# batched_mj_data = mjx.get_data(mj_model, batch)
-# print([d.qpos for d in batched_mj_data])
+rng = jax.random.PRNGKey(0)
+rng = jax.random.split(rng, 4096)
+batch = jax.vmap(lambda rng: mjx_data.replace(qpos=jax.random.uniform(rng, (7,))))(rng)
+
+jit_step = jax.jit(jax.vmap(mjx.step, in_axes=(None, 0)))
+batch = jit_step(mjx_model, batch)
+
+print(batch.qpos)
+
+batched_mj_data = mjx.get_data(mj_model, batch)
+print([d.qpos for d in batched_mj_data])
 

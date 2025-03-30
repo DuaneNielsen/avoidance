@@ -7,6 +7,7 @@ import numpy as np
 
 # Import Brax
 from brax.io import mjcf
+from brax.base import Force, Motion, Transform
 
 # Create an MJCF model for our 2D puck in a box with multiple obstacles
 box_size = 2.0
@@ -22,7 +23,7 @@ obstacles = [
 # Puck starting position
 puck_pos = [-0.2, 0.1, 0]
 
-# Begin building the MJCF string
+# Begin building the MJCF string - add actuators for control
 mjcf_string = """
 <mujoco model="2d_puck">
   <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
@@ -70,10 +71,10 @@ init_q = jp.array([puck_pos[0], puck_pos[1], puck_pos[2], 1.0, 0.0, 0.0, 0.0])
 first_obstacle = obstacles[0]
 direction = jp.array([first_obstacle[0], first_obstacle[1]]) - jp.array([puck_pos[0], puck_pos[1]])
 direction = direction / jp.sqrt(jp.sum(direction ** 2))  # Normalize
-speed = 5.0
+speed = 2.0  # Reduced initial speed so we can see acceleration effects better
 
 # Add angular velocity to the puck (rotating around z-axis)
-angular_speed = 2.0  # radians per second
+angular_speed = 0.0  # Start with no rotation
 
 # Initial velocities: [vx, vy, vz, wx, wy, wz]
 init_qd = jp.array([
@@ -237,23 +238,89 @@ def cast_rays(puck_pos, puck_radius, puck_angle, obstacles, max_distance, ray_an
     return results
 
 
+# Define control parameters
+forward_thrust = 0.2  # Forward thrust force magnitude
+rotation_torque = 1.  # Clockwise rotation torque magnitude
+
+
 # Function to simulate with position tracking and ray sensing
 def simulate(state, n_steps=100):
     states = [state]
     puck_positions = []
     all_ray_results = []  # List to store ray results for each frame
 
-    # JIT-compile the step function
-    step_fn = jax.jit(pipeline.step)
+    # Apply control forces properly in the physics simulation
+    def controlled_step(state):
+        # Get current orientation
+        quat = state.x.rot[0]
+        puck_angle = 2 * jp.arctan2(quat[3], quat[0])
+
+        # Calculate direction vector for thrust
+        forward_dir = jp.array([jp.cos(puck_angle), jp.sin(puck_angle), 0.0])
+
+        # Create a force vector for thrust in the forward direction
+        # This is in world coordinates
+        thrust_force = forward_dir * forward_thrust
+
+        # Apply rotation torque around z-axis (negative for clockwise)
+        # This is in world coordinates
+        rotation = jp.array([0.0, 0.0, -rotation_torque])
+
+        # Compute center of mass position and velocity in world frame
+        x_i = state.x_i
+        xd_i = state.xd_i
+
+        # Create force/torque to apply at center of mass
+        # Force will accelerate the body in the forward direction
+        # Torque will rotate the body clockwise
+        force = Force(
+            vel=thrust_force,  # Linear force
+            ang=rotation  # Angular torque
+        )
+
+        # Apply the force to create a delta-velocity
+        # F = ma, so dv = F/m * dt
+        # Assuming unit mass for simplicity
+        dv = Motion(
+            vel=force.vel * sys.opt.timestep,
+            ang=force.ang * sys.opt.timestep
+        )
+
+        # Add the delta-velocity to current velocity
+        new_xd_i = Motion(
+            vel=xd_i.vel + dv.vel,
+            ang=xd_i.ang + dv.ang
+        )
+
+        # Take a physics step with the standard pipeline
+        next_state = pipeline.step(sys, state, None)
+
+        # Replace the velocity with our controlled version
+        # This simulates applying the force to the body
+        controlled_state = next_state.replace(
+            xd_i=new_xd_i
+        )
+
+        # Enforce 2D constraint
+        controlled_state = controlled_state.replace(
+            x=controlled_state.x.replace(
+                pos=controlled_state.x.pos.at[:, 2].set(0.0)
+            ),
+            xd=controlled_state.xd.replace(
+                vel=controlled_state.xd.vel.at[:, 2].set(0.0),
+                ang=controlled_state.xd.ang.at[:, :2].set(0.0)  # Keep z-axis rotation
+            )
+        )
+
+        return controlled_state
+
+    # JIT-compile our step function for performance
+    jitted_step = jax.jit(controlled_step)
 
     for i in range(n_steps):
         # Get current position and orientation
         puck_pos = state.x.pos[0, :2]
-
-        # Extract the quaternion (w, x, y, z) from the state
-        quat = state.x.rot[0]  # Quaternion for the puck
-
-        # Convert quaternion to rotation angle around z-axis
+        quat = state.x.rot[0]
         puck_angle = 2 * jp.arctan2(quat[3], quat[0])
 
         # Cast multiple rays
@@ -270,20 +337,8 @@ def simulate(state, n_steps=100):
         puck_positions.append(puck_pos)
         all_ray_results.append(ray_results)
 
-        # Take a step
-        state = step_fn(sys, state, None)
-
-        # Enforce 2D constraint
-        state = state.replace(
-            x=state.x.replace(
-                pos=state.x.pos.at[:, 2].set(0.0)
-            ),
-            xd=state.xd.replace(
-                vel=state.xd.vel.at[:, 2].set(0.0),
-                ang=state.xd.ang.at[:, :2].set(0.0)  # Keep z-axis rotation
-            )
-        )
-
+        # Take a controlled step
+        state = jitted_step(state)
         states.append(state)
 
     # Add final position and ray information
@@ -319,7 +374,7 @@ fig, ax = plt.subplots(figsize=(10, 8))
 ax.set_xlim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_ylim(-box_size / 2 - puck_radius, box_size / 2 + puck_radius)
 ax.set_aspect('equal')
-ax.set_title('2D Puck Simulation with Multiple Ray Sensors')
+ax.set_title('2D Puck Simulation with Controls and Ray Sensors')
 ax.grid(True)
 
 # Draw the box
@@ -354,6 +409,10 @@ for i, style in enumerate(ray_line_styles):
 vel_line, = ax.plot([], [], 'r-', lw=2)
 arrowhead, = ax.plot([], [], 'r.', ms=10)
 
+# Initialize acceleration vector line (shows applied force)
+acc_line, = ax.plot([], [], 'b-', lw=2)  # Blue line for acceleration
+acc_arrowhead, = ax.plot([], [], 'b.', ms=10)  # Blue dot for acceleration arrowhead
+
 # Initialize rotation indicator line (to show angular velocity)
 rotation_line, = ax.plot([], [], 'g-', lw=3)  # Green line from center to edge
 
@@ -367,6 +426,7 @@ for i in range(3):  # Create text for each ray
     text = ax.text(0.05, 0.90 - i * 0.05, '', transform=ax.transAxes, verticalalignment='top')
     distance_texts.append(text)
 angular_vel_text = ax.text(0.05, 0.75, '', transform=ax.transAxes, verticalalignment='top')
+controls_text = ax.text(0.05, 0.70, '', transform=ax.transAxes, verticalalignment='top')
 
 # Add a legend for ray styles
 from matplotlib.lines import Line2D
@@ -374,7 +434,10 @@ from matplotlib.lines import Line2D
 legend_elements = [
     Line2D([0], [0], color='y', linestyle=ray_line_styles[0], lw=2, label='Forward Ray'),
     Line2D([0], [0], color='y', linestyle=ray_line_styles[1], lw=2, label='Left Ray (+120°)'),
-    Line2D([0], [0], color='y', linestyle=ray_line_styles[2], lw=2, label='Right Ray (-120°)')
+    Line2D([0], [0], color='y', linestyle=ray_line_styles[2], lw=2, label='Right Ray (-120°)'),
+    Line2D([0], [0], color='r', lw=2, label='Velocity'),
+    Line2D([0], [0], color='b', lw=2, label='Thrust Force'),
+    Line2D([0], [0], color='g', lw=2, label='Orientation')
 ]
 ax.legend(handles=legend_elements, loc='upper right')
 
@@ -400,6 +463,24 @@ def update(frame, trail_length=20):
     scale = 0.2
     vel_line.set_data([puck_x, puck_x + vx * scale], [puck_y, puck_y + vy * scale])
     arrowhead.set_data([puck_x + vx * scale], [puck_y + vy * scale])
+
+    # Get the puck angle
+    quat = state.x.rot[0]
+    angle = 2 * np.arctan2(quat[3], quat[0])
+
+    # Calculate thrust force direction
+    dir_x, dir_y = np.cos(angle), np.sin(angle)
+
+    # Update thrust vector (blue)
+    acc_scale = 0.3
+    acc_line.set_data(
+        [puck_x, puck_x + dir_x * forward_thrust * acc_scale],
+        [puck_y, puck_y + dir_y * forward_thrust * acc_scale]
+    )
+    acc_arrowhead.set_data(
+        [puck_x + dir_x * forward_thrust * acc_scale],
+        [puck_y + dir_y * forward_thrust * acc_scale]
+    )
 
     # Update all ray sensor visualizations
     if frame < len(all_ray_results):
@@ -434,15 +515,6 @@ def update(frame, trail_length=20):
 
     # Update rotation indicator line using quaternion orientation
     if frame < len(states):
-        # Extract the quaternion (w, x, y, z) from the state
-        quat = state.x.rot[0]  # Quaternion for the puck
-
-        # We need to convert the quaternion to a rotation angle in 2D
-        # In a 2D case, we care about rotation around z-axis
-        # Quaternion to rotation angle around z-axis can be found through:
-        # 2 * atan2(z, w)
-        angle = 2 * np.arctan2(quat[3], quat[0])
-
         # Calculate the point on the edge of the puck
         edge_x = puck_x + puck_radius * np.cos(angle)
         edge_y = puck_y + puck_radius * np.sin(angle)
@@ -466,8 +538,11 @@ def update(frame, trail_length=20):
         wz = state.xd.ang[0, 2]
         angular_vel_text.set_text(f'Angular Velocity: {wz:.2f} rad/s')
 
-    return [puck, vel_line, arrowhead, puck_trail, rotation_line,
-            frame_text, angular_vel_text] + ray_lines + ray_ends + distance_texts
+    # Add controls text
+    controls_text.set_text(f'Controls: Forward Thrust={forward_thrust:.1f}, Rotation Torque={rotation_torque:.1f}')
+
+    return [puck, vel_line, arrowhead, acc_line, acc_arrowhead, puck_trail, rotation_line,
+            frame_text, angular_vel_text, controls_text] + ray_lines + ray_ends + distance_texts
 
 
 # Create the animation
