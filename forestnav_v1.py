@@ -32,8 +32,8 @@ xml = """
   <worldbody>
 """
 
-sensor_angle = 0.4
-num_sensors = 5
+sensor_angle = 0.6
+num_sensors = 128
 
 xml += f"""
     <site name="origin"/>
@@ -48,7 +48,8 @@ xml += f"""
       <frame pos="0 0.01 0" quat="-1 1 0 0">
       """
 
-for i, theta in enumerate(np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)):
+rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
+for i, theta in enumerate(rangefinder_angles):
     xml += f"""
               <site name="site_rangefinder{i}" quat="{cos(theta/2)} 0 {sin(theta/2)} 0" size="0.01" rgba="1 0 0 1"/>
             """
@@ -115,7 +116,7 @@ mjx_data = mjx.put_data(mj_model, mj_data)
 jit_step = jax.jit(mjx.step)
 
 # Simulation parameters
-duration = 6.0  # seconds
+duration = 30.0  # seconds
 framerate = 30  # fps
 n_frames = int(duration * framerate)
 dt = mj_model.opt.timestep
@@ -144,15 +145,16 @@ with mujoco.Renderer(mj_model, height, width) as renderer:
     # Position the camera for better view
     cam = mujoco.MjvCamera()
     cam.azimuth = 90
-    cam.elevation = -30
+    cam.elevation = -50
     cam.distance = 3.5
-    cam.lookat = np.array([0, 0, 0.5])
+    cam.lookat = np.array([0, 0, 0.2])
 
-    target_vel, target_rotation_vel = 0.3, 0.8
+    target_vel, target_rotation_vel = 0.4, 1.
 
     for i in trange(n_frames):
 
-        ctrl = jax.numpy.array([target_vel, target_rotation_vel])
+        ctrl_rotation_vel = - target_rotation_vel * np.sign(i - n_frames//2)
+        ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
         mjx_data = mjx_data.replace(ctrl=ctrl)
 
         # Run multiple steps between frames
@@ -183,23 +185,30 @@ plt.figure(figsize=(12, 8))
 # Plot rangefinder readings
 plt.subplot(2, 1, 1)
 rangefinder_data = np.array(rangefinder_data)
-for i in range(num_sensors):
-    plt.plot(time_points, rangefinder_data[:, i], label=f'Rangefinder {i}', linewidth=2)
+plt.imshow(rangefinder_data.T)
+min_idx = 0  # First element (most negative angle)
+center_idx = len(rangefinder_angles) // 2  # Middle element (approximately zero)
+max_idx = len(rangefinder_angles) - 1  # Last element (most positive angle)
+
+plt.yticks(
+    [min_idx, center_idx, max_idx],
+    [f'{rangefinder_angles[min_idx]:.2f}', f'{rangefinder_angles[center_idx]:.2f}', f'{rangefinder_angles[max_idx]:.2f}']
+)
 
 plt.xlabel('Time (s)')
-plt.ylabel('Distance (m)')
+plt.ylabel('Angle (m)')
 plt.title('Rangefinder Readings')
-plt.legend()
+# plt.legend()
 plt.grid(True)
-#
-# # Plot joint angle
-# plt.subplot(2, 1, 2)
-# plt.plot(time_points, joint_angle_data, label='Joint Angle', color='green', linewidth=2)
-# plt.xlabel('Time (s)')
-# plt.ylabel('Angle (rad)')
-# plt.title('Joint Angle')
-# plt.grid(True)
-#
+
+# Plot joint angle
+plt.subplot(2, 1, 2)
+plt.plot(time_points, joint_angle_data, label='Joint Angle', color='green', linewidth=2)
+plt.xlabel('Time (s)')
+plt.ylabel('Angle (rad)')
+plt.title('Joint Angle')
+plt.grid(True)
+
 plt.tight_layout()
 plt.savefig('rangefinder_data.png')
 plt.show()
