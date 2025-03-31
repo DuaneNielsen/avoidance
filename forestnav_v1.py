@@ -3,12 +3,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mujoco
 from mujoco import mjx
+
 import mediapy as media
 from math import sin, cos
+from tqdm import trange
+
 
 xml = """
 <mujoco model="simple_2d">
   <compiler autolimits="true"/>
+  
+  <option integrator="implicitfast"/>
 
   <asset>
     <material name="body_material" rgba="0.2 0.8 0.2 1"/>
@@ -35,10 +40,11 @@ xml += f"""
     <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
 
     <!-- stacked joint: hinge + slide -->
-    <body pos="0.0 0 0" name="body">
-      <joint name="slidex" type="slide" axis="1. 0. 0." range="0 1"/>
-      <joint name="slidey" type="slide" axis="0. 1. 0." range="0 1"/>
-      <joint name="hinge0" type="hinge" axis="0 0 1."/>
+    <body pos="0.0 0 0" name="vehicle">
+      <joint name="x_joint" type="slide" axis="1. 0. 0." range="-1 1"/>
+      <joint name="y_joint" type="slide" axis="0. 1. 0." range="-1 1"/>
+      <joint name="rot_joint" type="hinge" axis="0 0 1."/>
+      <site name="velocity_site" pos="0 0 0" size="0.01"/>
       <frame pos="0 0.01 0" quat="-1 1 0 0">
       """
 
@@ -82,12 +88,16 @@ for i in range(num_sensors):
         """
 
 xml += """
+    <framequat name="vehicle_quat" objtype="site" objname="velocity_site"/>
   </sensor>
 
   <actuator>
-    <position name="rotation_control" joint="hinge0" kp="10" ctrlrange="-3.14 3.14"/>
-    <position name="x_control" joint="slidex" kp="10" ctrlrange="-1 1"/>
-    <position name="y_control" joint="slidey" kp="10" ctrlrange="-1 1"/>
+    
+    <!-- Forward/backward velocity control in body frame -->
+    <velocity name="body_y" site='velocity_site' kv="1." gear="0 1 0 0 0 0" ctrlrange="-2 2"/>
+    
+    <!-- Angular velocity control around Z axis in body frame -->
+    <velocity name="angular_velocity" joint="rot_joint" kv="1." ctrlrange="-1 1"/>
   </actuator>
 
 </mujoco>
@@ -138,20 +148,12 @@ with mujoco.Renderer(mj_model, height, width) as renderer:
     cam.distance = 3.5
     cam.lookat = np.array([0, 0, 0.5])
 
-    target_position, x, y = 0., 0., 0.
+    target_vel, target_rotation_vel = 0.3, 0.8
 
-    for i in range(n_frames * 3):
+    for i in trange(n_frames):
 
-        if 0 <= i < n_frames:
-            target_position = 2 * np.pi * (i / n_frames)
-
-        if n_frames <= i < n_frames * 2:
-            x = (i - n_frames) / n_frames
-
-        if n_frames * 2 <= i < n_frames * 3:
-            y = (i - 2 * n_frames) / n_frames
-
-        mjx_data = mjx_data.replace(ctrl=jax.numpy.array([target_position, x, y]))
+        ctrl = jax.numpy.array([target_vel, target_rotation_vel])
+        mjx_data = mjx_data.replace(ctrl=ctrl)
 
         # Run multiple steps between frames
         for _ in range(steps_per_frame):
