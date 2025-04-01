@@ -8,103 +8,118 @@ from mujoco import mjx
 import mediapy as media
 from math import sin, cos
 from tqdm import trange
+from typing import Callable
 
 
-xml = """
-<mujoco model="simple_2d">
-  <compiler autolimits="true"/>
-  
-  <option integrator="implicitfast"/>
+def obstacles_xml():
+    xml = ""
+    obstacles = []
+    for x in np.linspace(-1., 1., 5):
+        for y in np.linspace(-1., 1, 5):
+            if x == 0. and y == 0.:
+                continue
+            obstacles.append([x, y, 0.07])
 
-  <asset>
-    <material name="body_material" rgba="0.2 0.8 0.2 1"/>
-    <material name="obstacle_material" rgba="0.8 0.2 0.2 1"/>
-    <material name="floor_material" rgba="0.3 0.3 0.3 1"/>
-  </asset>
+    for i, (x, y, radius) in enumerate(obstacles):
+        xml += f"""
+        <!-- Obstacle {i} -->
+        <geom name="obstacle_{i}" type="sphere" pos="{x} {y} 0" 
+              size="{radius}" contype="1" conaffinity="1" material="obstacle_material"/>
+    """
+    return xml
 
-  <option timestep="0.02">
-    <flag contact="disable" />
-  </option>
 
-  <default>
-    <joint damping="0.25" stiffness="0.0"/>
-  </default>
-  
-  <worldbody>
-"""
+def forestnav_xml(
+        sensor_angle=0.6,
+        num_sensors=128,
+        obstacles_xml_f: Callable = None
+):
 
-sensor_angle = 0.6
-num_sensors = 128
+    xml = """
+    <mujoco model="simple_2d">
+      <compiler autolimits="true"/>
+      
+      <option integrator="implicitfast"/>
+    
+      <asset>
+        <material name="body_material" rgba="0.2 0.8 0.2 1"/>
+        <material name="obstacle_material" rgba="0.8 0.2 0.2 1"/>
+        <material name="floor_material" rgba="0.3 0.3 0.3 1"/>
+      </asset>
+    
+      <option timestep="0.02">
+        <flag contact="disable" />
+      </option>
+    
+      <default>
+        <joint damping="0.25" stiffness="0.0"/>
+      </default>
+      
+      <worldbody>
+    """
 
-xml += f"""
-    <site name="origin"/>
-    <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    xml += f"""
+        <site name="origin"/>
+        <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    
+        <!-- stacked joint: hinge + slide -->
+        <body pos="0.0 0 0" name="vehicle">
+          <joint name="x_joint" type="slide" axis="1. 0. 0." range="-1 1"/>
+          <joint name="y_joint" type="slide" axis="0. 1. 0." range="-1 1"/>
+          <joint name="rot_joint" type="hinge" axis="0 0 1."/>
+          <site name="velocity_site" pos="0 0 0" size="0.01"/>
+          <frame pos="0 0.01 0" quat="-1 1 0 0">
+          """
 
-    <!-- stacked joint: hinge + slide -->
-    <body pos="0.0 0 0" name="vehicle">
-      <joint name="x_joint" type="slide" axis="1. 0. 0." range="-1 1"/>
-      <joint name="y_joint" type="slide" axis="0. 1. 0." range="-1 1"/>
-      <joint name="rot_joint" type="hinge" axis="0 0 1."/>
-      <site name="velocity_site" pos="0 0 0" size="0.01"/>
-      <frame pos="0 0.01 0" quat="-1 1 0 0">
+    rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
+    for i, theta in enumerate(rangefinder_angles):
+        xml += f"""
+                  <site name="site_rangefinder{i}" quat="{cos(theta / 2)} 0 {sin(theta / 2)} 0" size="0.01" rgba="1 0 0 1"/>
+                """
+
+    xml += f"""
+          </frame>
+          <geom type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.1"/>
+        </body>
+    """
+
+    xml += obstacles_xml_f()
+
+    xml += """    
+      </worldbody>
+    
+      <sensor>
       """
 
-rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
-for i, theta in enumerate(rangefinder_angles):
-    xml += f"""
-              <site name="site_rangefinder{i}" quat="{cos(theta/2)} 0 {sin(theta/2)} 0" size="0.01" rgba="1 0 0 1"/>
+    for i in range(num_sensors):
+        xml += f"""
+            <rangefinder name="rangefinder{i}" site="site_rangefinder{i}"/>
             """
 
-xml += f"""
-      </frame>
-      <geom type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.1"/>
-    </body>
-"""
-
-
-obstacles = []
-for x in np.linspace(-1., 1., 5):
-    for y in np.linspace(-1., 1, 5):
-        if x == 0. and y == 0.:
-            continue
-        obstacles.append([x, y, 0.07])
-
-
-for i, (x, y, radius) in enumerate(obstacles):
-    xml += f"""
-    <!-- Obstacle {i} -->
-    <geom name="obstacle_{i}" type="sphere" pos="{x} {y} 0" 
-          size="{radius}" contype="1" conaffinity="1" material="obstacle_material"/>
-"""
-
-
-xml += """    
-  </worldbody>
-
-  <sensor>
-  """
-
-for i in range(num_sensors):
-    xml += f"""
-        <rangefinder name="rangefinder{i}" site="site_rangefinder{i}"/>
-        """
-
-xml += """
-  </sensor>
-
-  <actuator>
+    xml += """
+      </sensor>
     
-    <!-- Forward/backward velocity control in body frame -->
-    <velocity name="body_y" site='velocity_site' kv="1." gear="0 1 0 0 0 0" ctrlrange="-2 2"/>
+      <actuator>
+        
+        <!-- Forward/backward velocity control in body frame -->
+        <velocity name="body_y" site='velocity_site' kv="1." gear="0 1 0 0 0 0" ctrlrange="-2 2"/>
+        
+        <!-- Angular velocity control around Z axis in body frame -->
+        <velocity name="angular_velocity" joint="rot_joint" kv="1." ctrlrange="-1 1"/>
+      </actuator>
     
-    <!-- Angular velocity control around Z axis in body frame -->
-    <velocity name="angular_velocity" joint="rot_joint" kv="1." ctrlrange="-1 1"/>
-  </actuator>
+    </mujoco>
+    """
+    return xml
 
-</mujoco>
-"""
 
 if __name__ == '__main__':
+
+    sensor_angle = 0.6
+    num_sensors = 128
+    rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
+
+    xml = forestnav_xml(sensor_angle, num_sensors, obstacles_xml)
 
     # Create MuJoCo model and data
     mj_model = mujoco.MjModel.from_xml_string(xml)
@@ -155,7 +170,7 @@ if __name__ == '__main__':
 
         for i in trange(n_frames):
 
-            ctrl_rotation_vel = - target_rotation_vel * np.sign(i - n_frames//2)
+            ctrl_rotation_vel = - target_rotation_vel * np.sign(i - n_frames // 2)
             ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
             mjx_data = mjx_data.replace(ctrl=ctrl)
 
@@ -194,7 +209,8 @@ if __name__ == '__main__':
 
     plt.yticks(
         [min_idx, center_idx, max_idx],
-        [f'{rangefinder_angles[min_idx]:.2f}', f'{rangefinder_angles[center_idx]:.2f}', f'{rangefinder_angles[max_idx]:.2f}']
+        [f'{rangefinder_angles[min_idx]:.2f}', f'{rangefinder_angles[center_idx]:.2f}',
+         f'{rangefinder_angles[max_idx]:.2f}']
     )
 
     plt.xlabel('Time (s)')
