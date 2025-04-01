@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 import mujoco
@@ -89,7 +90,6 @@ for i in range(num_sensors):
         """
 
 xml += """
-    <framequat name="vehicle_quat" objtype="site" objname="velocity_site"/>
   </sensor>
 
   <actuator>
@@ -104,113 +104,115 @@ xml += """
 </mujoco>
 """
 
-# Create MuJoCo model and data
-mj_model = mujoco.MjModel.from_xml_string(xml)
-mj_data = mujoco.MjData(mj_model)
+if __name__ == '__main__':
 
-# Transfer model and data to MJX
-mjx_model = mjx.put_model(mj_model)
-mjx_data = mjx.put_data(mj_model, mj_data)
+    # Create MuJoCo model and data
+    mj_model = mujoco.MjModel.from_xml_string(xml)
+    mj_data = mujoco.MjData(mj_model)
 
-# JIT-compile step function
-jit_step = jax.jit(mjx.step)
+    # Transfer model and data to MJX
+    mjx_model = mjx.put_model(mj_model)
+    mjx_data = mjx.put_data(mj_model, mj_data)
 
-# Simulation parameters
-duration = 30.0  # seconds
-framerate = 30  # fps
-n_frames = int(duration * framerate)
-dt = mj_model.opt.timestep
-steps_per_frame = max(1, int(1.0 / (framerate * dt)))
+    # JIT-compile step function
+    jit_step = jax.jit(mjx.step)
 
-# Create visualization options
-scene_option = mujoco.MjvOption()
-scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
-scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
-scene_option.frame = mujoco.mjtFrame.mjFRAME_SITE
+    # Simulation parameters
+    duration = 30.0  # seconds
+    framerate = 30  # fps
+    n_frames = int(duration * framerate)
+    dt = mj_model.opt.timestep
+    steps_per_frame = max(1, int(1.0 / (framerate * dt)))
 
-# Renderer dimensions - match with the offscreen buffer size
-width, height = 480, 480  # swapped to match the XML sizes
+    # Create visualization options
+    scene_option = mujoco.MjvOption()
+    scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
+    scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
+    scene_option.frame = mujoco.mjtFrame.mjFRAME_SITE
 
-# Prepare data recording
-time_points = []
-rangefinder_data = []
-joint_angle_data = []
+    # Renderer dimensions - match with the offscreen buffer size
+    width, height = 480, 480  # swapped to match the XML sizes
 
-# Reset simulation
-mujoco.mj_resetData(mj_model, mj_data)
-mjx_data = mjx.put_data(mj_model, mj_data)
-# Render and simulate
-frames = []
-with mujoco.Renderer(mj_model, height, width) as renderer:
-    # Position the camera for better view
-    cam = mujoco.MjvCamera()
-    cam.azimuth = 90
-    cam.elevation = -50
-    cam.distance = 3.5
-    cam.lookat = np.array([0, 0, 0.2])
+    # Prepare data recording
+    time_points = []
+    rangefinder_data = []
+    joint_angle_data = []
 
-    target_vel, target_rotation_vel = 0.4, 1.
+    # Reset simulation
+    mujoco.mj_resetData(mj_model, mj_data)
+    mjx_data = mjx.put_data(mj_model, mj_data)
+    # Render and simulate
+    frames = []
+    with mujoco.Renderer(mj_model, height, width) as renderer:
+        # Position the camera for better view
+        cam = mujoco.MjvCamera()
+        cam.azimuth = 90
+        cam.elevation = -50
+        cam.distance = 3.5
+        cam.lookat = np.array([0, 0, 0.2])
 
-    for i in trange(n_frames):
+        target_vel, target_rotation_vel = 0.4, 1.
 
-        ctrl_rotation_vel = - target_rotation_vel * np.sign(i - n_frames//2)
-        ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
-        mjx_data = mjx_data.replace(ctrl=ctrl)
+        for i in trange(n_frames):
 
-        # Run multiple steps between frames
-        for _ in range(steps_per_frame):
-            mjx_data = jit_step(mjx_model, mjx_data)
+            ctrl_rotation_vel = - target_rotation_vel * np.sign(i - n_frames//2)
+            ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
+            mjx_data = mjx_data.replace(ctrl=ctrl)
 
-        # Get data back to CPU
-        mj_data = mjx.get_data(mj_model, mjx_data)
+            # Run multiple steps between frames
+            for _ in range(steps_per_frame):
+                mjx_data = jit_step(mjx_model, mjx_data)
 
-        # Record data
-        time_points.append(mj_data.time)
-        rangefinder_data.append([mj_data.sensor(f'rangefinder{i}').data.item() for i in range(num_sensors)])
-        joint_angle_data.append(mj_data.qpos[0])
+            # Get data back to CPU
+            mj_data = mjx.get_data(mj_model, mjx_data)
 
-        # Render the frame
-        renderer.update_scene(mj_data, camera=cam, scene_option=scene_option)
-        pixels = renderer.render()
-        frames.append(pixels)
+            # Record data
+            time_points.append(mj_data.time)
+            rangefinder_data.append(np.array(mj_data.sensordata))
+            joint_angle_data.append(mj_data.qpos[0])
 
-# Create video file
-output_filename = "forestnav_v1.mp4"
-media.write_video(output_filename, frames, fps=framerate)
-print(f"Video saved to {output_filename}")
+            # Render the frame
+            renderer.update_scene(mj_data, camera=cam, scene_option=scene_option)
+            pixels = renderer.render()
+            frames.append(pixels)
 
-# Plot rangefinder readings and joint position
-plt.figure(figsize=(12, 8))
-#
-# Plot rangefinder readings
-plt.subplot(2, 1, 1)
-rangefinder_data = np.array(rangefinder_data)
-plt.imshow(rangefinder_data.T)
-min_idx = 0  # First element (most negative angle)
-center_idx = len(rangefinder_angles) // 2  # Middle element (approximately zero)
-max_idx = len(rangefinder_angles) - 1  # Last element (most positive angle)
+    # Create video file
+    output_filename = "forestnav_v1.mp4"
+    media.write_video(output_filename, frames, fps=framerate)
+    print(f"Video saved to {output_filename}")
 
-plt.yticks(
-    [min_idx, center_idx, max_idx],
-    [f'{rangefinder_angles[min_idx]:.2f}', f'{rangefinder_angles[center_idx]:.2f}', f'{rangefinder_angles[max_idx]:.2f}']
-)
+    # Plot rangefinder readings and joint position
+    plt.figure(figsize=(12, 8))
+    #
+    # Plot rangefinder readings
+    plt.subplot(2, 1, 1)
+    rangefinder_data = np.stack(rangefinder_data)
+    plt.imshow(rangefinder_data.T)
+    min_idx = 0  # First element (most negative angle)
+    center_idx = len(rangefinder_angles) // 2  # Middle element (approximately zero)
+    max_idx = len(rangefinder_angles) - 1  # Last element (most positive angle)
 
-plt.xlabel('Time (s)')
-plt.ylabel('Angle (m)')
-plt.title('Rangefinder Readings')
-# plt.legend()
-plt.grid(True)
+    plt.yticks(
+        [min_idx, center_idx, max_idx],
+        [f'{rangefinder_angles[min_idx]:.2f}', f'{rangefinder_angles[center_idx]:.2f}', f'{rangefinder_angles[max_idx]:.2f}']
+    )
 
-# Plot joint angle
-plt.subplot(2, 1, 2)
-plt.plot(time_points, joint_angle_data, label='Joint Angle', color='green', linewidth=2)
-plt.xlabel('Time (s)')
-plt.ylabel('Angle (rad)')
-plt.title('Joint Angle')
-plt.grid(True)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Angle (m)')
+    plt.title('Rangefinder Readings')
+    # plt.legend()
+    plt.grid(True)
 
-plt.tight_layout()
-plt.savefig('rangefinder_data.png')
-plt.show()
+    # Plot joint angle
+    plt.subplot(2, 1, 2)
+    plt.plot(time_points, joint_angle_data, label='Joint Angle', color='green', linewidth=2)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Angle (rad)')
+    plt.title('Joint Angle')
+    plt.grid(True)
 
-print("Simulation complete!")
+    plt.tight_layout()
+    plt.savefig('rangefinder_data.png')
+    plt.show()
+
+    print("Simulation complete!")
