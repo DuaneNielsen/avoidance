@@ -8,17 +8,26 @@ from mujoco import mjx
 import mediapy as media
 from math import sin, cos
 from tqdm import trange
-from typing import Callable
+from typing import Callable, List
+from functools import partial
 
 
-def obstacles_xml():
+def obstacles_grid_xml(skip_pos: List[float]=None, radius=0.07):
+    if skip_pos is None:
+        skip_pos = [(0., 0.)]
+
     xml = ""
+
     obstacles = []
     for x in np.linspace(-1., 1., 5):
         for y in np.linspace(-1., 1, 5):
-            if x == 0. and y == 0.:
-                continue
-            obstacles.append([x, y, 0.07])
+            skip = False
+            for skip_x, skip_y in skip_pos:
+                if x == skip_x and y == skip_y:
+                    skip = True
+                    break
+            if not skip:
+                obstacles.append([x, y, radius])
 
     for i, (x, y, radius) in enumerate(obstacles):
         xml += f"""
@@ -121,7 +130,9 @@ if __name__ == '__main__':
     num_sensors = 128
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
 
-    xml = forestnav_xml(sensor_angle, num_sensors, obstacles_xml)
+    obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.)], 0.07)
+
+    xml = forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
 
     # Create MuJoCo model and data
     mj_model = mujoco.MjModel.from_xml_string(xml)
@@ -178,7 +189,9 @@ if __name__ == '__main__':
         cam.distance = 3.5
         cam.lookat = np.array([0, 0, 0.2])
 
-        target_vel, target_rotation_vel = 0.4, 1.
+        target_vel, target_rotation_vel = 0.6, 1.
+
+        mjx_data = mjx_data.replace(qpos=jnp.array([-1, -1, -jnp.pi/2]))
 
         for i in trange(n_frames):
 
