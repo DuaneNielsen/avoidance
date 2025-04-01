@@ -53,6 +53,7 @@ def forestnav_xml(
       <asset>
         <material name="body_material" rgba="0.2 0.8 0.2 1"/>
         <material name="obstacle_material" rgba="0.8 0.2 0.2 1"/>
+        <material name="goal_material" rgba="0.3 0.9 0.2 1"/>
         <material name="floor_material" rgba="0.3 0.3 0.3 1"/>
       </asset>
     
@@ -106,6 +107,7 @@ def forestnav_xml(
             """
 
     xml += """
+        <distance name="goal_distance" geom1="goal" body2="vehicle"/>
       </sensor>
     
       <actuator>
@@ -130,7 +132,7 @@ if __name__ == '__main__':
     num_sensors = 128
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
 
-    obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.)], 0.07)
+    obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.), (1., 1.)], 0.07)
 
     xml = forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
 
