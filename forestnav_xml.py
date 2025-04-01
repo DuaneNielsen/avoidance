@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mujoco
 from mujoco import mjx
+from dataclasses import dataclass
 
 import mediapy as media
 from math import sin, cos
@@ -45,7 +46,7 @@ def forestnav_xml(
 ):
 
     xml = """
-    <mujoco model="simple_2d">
+    <mujoco model="forestnav_v1">
       <compiler autolimits="true"/>
       
       <option integrator="implicitfast"/>
@@ -91,6 +92,7 @@ def forestnav_xml(
           </frame>
           <geom type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.1"/>
         </body>
+        <geom name="goal" pos="1. 1. 0" type="sphere" size="0.07" material="goal_material"/>
     """
 
     xml += obstacles_xml_f()
@@ -99,6 +101,8 @@ def forestnav_xml(
       </worldbody>
     
       <sensor>
+      <framepos name="vehiclepos" objtype="body" objname="vehicle"/>
+      <framepos name="goalpos" objtype="geom" objname="goal"/>
       """
 
     for i in range(num_sensors):
@@ -107,7 +111,6 @@ def forestnav_xml(
             """
 
     xml += """
-        <distance name="goal_distance" geom1="goal" body2="vehicle"/>
       </sensor>
     
       <actuator>
@@ -124,12 +127,31 @@ def forestnav_xml(
     return xml
 
 
+def make_forest_v1(sensor_angle, num_sensors):
+    """
+
+    :param sensor_angle:
+    :param num_sensors:
+    :return: mjx_model, mjx_data
+    """
+    obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.), (1., 1.)], 0.07)
+    xml = forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
+
+    mj_model = mujoco.MjModel.from_xml_string(xml)
+    mj_data = mujoco.MjData(mj_model)
+
+    # Transfer model and data to MJX
+    mjx_model = mjx.put_model(mj_model)
+    mjx_data = mjx.put_data(mj_model, mj_data)
+    return mjx_model, mjx_data
+
+
 if __name__ == '__main__':
 
     test_batch = True
 
     sensor_angle = 0.6
-    num_sensors = 128
+    num_sensors = 64
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
 
     obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.), (1., 1.)], 0.07)
