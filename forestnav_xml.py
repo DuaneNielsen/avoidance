@@ -115,6 +115,8 @@ def forestnav_xml(
 
 if __name__ == '__main__':
 
+    test_batch = True
+
     sensor_angle = 0.6
     num_sensors = 128
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
@@ -131,6 +133,15 @@ if __name__ == '__main__':
 
     # JIT-compile step function
     jit_step = jax.jit(mjx.step)
+
+    if test_batch:
+        rng = jax.random.PRNGKey(0)
+        rng = jax.random.split(rng, 4096)
+        batch = jax.vmap(lambda rng: mjx_data.replace(qpos=jax.random.uniform(rng, (3,))))(rng)
+
+        vmap_step = jax.jit(jax.vmap(mjx.step, in_axes=(None, 0)))
+        batch = vmap_step(mjx_model, batch)
+        print("batch_test_successful")
 
     # Simulation parameters
     duration = 30.0  # seconds
@@ -156,6 +167,7 @@ if __name__ == '__main__':
     # Reset simulation
     mujoco.mj_resetData(mj_model, mj_data)
     mjx_data = mjx.put_data(mj_model, mj_data)
+
     # Render and simulate
     frames = []
     with mujoco.Renderer(mj_model, height, width) as renderer:
