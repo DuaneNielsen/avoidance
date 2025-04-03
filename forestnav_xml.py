@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import mujoco
 from mujoco import mjx
 from dataclasses import dataclass
+from mujoco.mjx._src.math import normalize_with_norm
 
 import mediapy as media
 from math import sin, cos
@@ -101,8 +102,7 @@ def forestnav_xml(
       </worldbody>
     
       <sensor>
-      <framepos name="vehiclepos" objtype="body" objname="vehicle"/>
-      <framepos name="goalpos" objtype="geom" objname="goal"/>
+      <framepos name="goalvec" objtype="geom" objname="goal" reftype="site" refname="velocity_site"/>
       """
 
     for i in range(num_sensors):
@@ -179,7 +179,7 @@ if __name__ == '__main__':
         print("batch_test_successful")
 
     # Simulation parameters
-    duration = 30.0  # seconds
+    duration = 10.0  # seconds
     framerate = 30  # fps
     n_frames = int(duration * framerate)
     dt = mj_model.opt.timestep
@@ -198,6 +198,7 @@ if __name__ == '__main__':
     time_points = []
     rangefinder_data = []
     joint_angle_data = []
+    goal_pos_in_body_frame = []
 
     # Reset simulation
     mujoco.mj_resetData(mj_model, mj_data)
@@ -219,7 +220,10 @@ if __name__ == '__main__':
 
         for i in trange(n_frames):
 
-            ctrl_rotation_vel = - target_rotation_vel * np.sign(i - n_frames // 2)
+            goal_vec_in_vehicle_frame = mjx_data.sensordata[0:3]
+            rangefinder = mjx_data.sensordata[3:]
+            goal_vec_normalized, distance = normalize_with_norm(goal_vec_in_vehicle_frame)
+            ctrl_rotation_vel = - jnp.arcsin(goal_vec_normalized[0])
             ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
             mjx_data = mjx_data.replace(ctrl=ctrl)
 
@@ -232,8 +236,9 @@ if __name__ == '__main__':
 
             # Record data
             time_points.append(mj_data.time)
-            rangefinder_data.append(np.array(mj_data.sensordata))
-            joint_angle_data.append(mj_data.qpos[0])
+            rangefinder_data.append(np.array(rangefinder))
+            joint_angle_data.append(mj_data.qpos[2])
+            goal_pos_in_body_frame.append(mj_data.sensordata[:3])
 
             # Render the frame
             renderer.update_scene(mj_data, camera=cam, scene_option=scene_option)
@@ -249,7 +254,7 @@ if __name__ == '__main__':
     plt.figure(figsize=(12, 8))
     #
     # Plot rangefinder readings
-    plt.subplot(2, 1, 1)
+    plt.subplot(3, 1, 1)
     rangefinder_data = np.stack(rangefinder_data)
     plt.imshow(rangefinder_data.T)
     min_idx = 0  # First element (most negative angle)
@@ -269,11 +274,18 @@ if __name__ == '__main__':
     plt.grid(True)
 
     # Plot joint angle
-    plt.subplot(2, 1, 2)
+    plt.subplot(3, 1, 2)
     plt.plot(time_points, joint_angle_data, label='Joint Angle', color='green', linewidth=2)
     plt.xlabel('Time (s)')
     plt.ylabel('Angle (rad)')
     plt.title('Joint Angle')
+    plt.grid(True)
+
+    plt.subplot(3, 1, 3)
+    plt.plot(time_points, goal_pos_in_body_frame, label='Goal Pos', color='green', linewidth=2)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Angle (rad)')
+    plt.title('Goal pos in body frame')
     plt.grid(True)
 
     plt.tight_layout()
