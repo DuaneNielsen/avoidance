@@ -102,6 +102,8 @@ def forestnav_xml(
       </worldbody>
     
       <sensor>
+      <framepos name="vehicle_pos" objtype="body" objname="vehicle"/>
+      <framepos name="goal_pos" objtype="geom" objname="goal"/>
       <framepos name="goalvec" objtype="geom" objname="goal" reftype="site" refname="velocity_site"/>
       """
 
@@ -220,8 +222,10 @@ if __name__ == '__main__':
 
         for i in trange(n_frames):
 
-            goal_vec_in_vehicle_frame = mjx_data.sensordata[0:3]
-            rangefinder = mjx_data.sensordata[3:]
+            vehicle_pos = mjx_data.sensordata[:3]
+            goal_pos = mjx_data.sensordata[3:6]
+            goal_vec_in_vehicle_frame = mjx_data.sensordata[6:9]
+            rangefinder = mjx_data.sensordata[9:]
             goal_vec_normalized, distance = normalize_with_norm(goal_vec_in_vehicle_frame)
             ctrl_rotation_vel = - jnp.arcsin(goal_vec_normalized[0])
             ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
