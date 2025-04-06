@@ -95,13 +95,13 @@ def setup_parser():
     parser = argparse.ArgumentParser(description='Train a PPO agent')
 
     # Core training parameters
-    parser.add_argument('--num_timesteps', type=int, default=2_000_000,
+    parser.add_argument('--num_timesteps', type=int, default=20_000_000,
                         help='Total number of environment timesteps to train for')
     parser.add_argument('--num_evals', type=int, default=20,
                         help='Number of evaluation episodes during training')
-    parser.add_argument('--reward_scaling', type=float, default=800.0,
+    parser.add_argument('--reward_scaling', type=float, default=1.0,
                         help='Scaling factor for rewards')
-    parser.add_argument('--episode_length', type=int, default=1000,
+    parser.add_argument('--episode_length', type=int, default=600,
                         help='Maximum length of an episode')
 
     # Environment settings
@@ -117,17 +117,17 @@ def setup_parser():
                         help='Number of minibatches to use per update')
     parser.add_argument('--num_updates_per_batch', type=int, default=1,
                         help='Number of passes over each batch')
-    parser.add_argument('--discounting', type=float, default=0.97,
+    parser.add_argument('--discounting', type=float, default=0.99,
                         help='Discount factor for future rewards')
-    parser.add_argument('--learning_rate', type=float, default=3e-4,
+    parser.add_argument('--learning_rate', type=float, default=0.001,
                         help='Learning rate for optimizer')
-    parser.add_argument('--entropy_cost', type=float, default=1e-3,
+    parser.add_argument('--entropy_cost', type=float, default=0.001,
                         help='Entropy regularization coefficient')
 
     # Parallelization settings
-    parser.add_argument('--num_envs', type=int, default=128,
+    parser.add_argument('--num_envs', type=int, default=256,
                         help='Number of parallel environments to run')
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for training')
 
     # Misc
@@ -160,23 +160,29 @@ if __name__ == '__main__':
 
     env = envs.get_environment(env_name, sensor_angle=0.6, num_sensors=64)
 
-    # define the jit reset/step functions
-    jit_reset = jax.jit(env.reset)
-    jit_step = jax.jit(env.step)
 
-    print("test environment")
-    # initialize the state
-    state = jit_reset(jax.random.PRNGKey(0))
-    rollout = [state.pipeline_state]
+    if args.dev:
+        # define the jit reset/step functions
+        jit_reset = jax.jit(env.reset)
+        jit_step = jax.jit(env.step)
 
-    # grab a trajectory
-    for i in range(600):
-        ctrl = -0.1 * jnp.ones(env.sys.nu)
-        state = jit_step(state, ctrl)
-        rollout.append(state.pipeline_state)
+        print("test environment")
+        # initialize the state
+        state = jit_reset(jax.random.PRNGKey(0))
+        rollout = [state.pipeline_state]
+        reward = 0.
 
-    output_filename = "rollout_ppo.mp4"
-    media.write_video(output_filename, env.render(rollout), fps=1.0 / env.dt)
+        # grab a trajectory
+        for i in range(args.episode_length):
+            ctrl = -0.1 * jnp.ones(env.sys.nu)
+            ctrl = jnp.array([0.6, state.obs[0]])
+            state = jit_step(state, ctrl)
+            reward += state.reward
+            rollout.append(state.pipeline_state)
+
+        print(f'test reward: {reward}')
+        output_filename = "rollout_ppo.mp4"
+        media.write_video(output_filename, env.render(rollout), fps=1.0 / env.dt)
 
     print('start training')
 
@@ -190,11 +196,11 @@ if __name__ == '__main__':
             batch_size=8, seed=0)
     else:
         train_fn = partial(
-            ppo.train, num_timesteps=2_000_000, num_evals=20, reward_scaling=800.,
-            episode_length=1000, normalize_observations=False, action_repeat=5,
-            unroll_length=10, num_minibatches=256, num_updates_per_batch=1,
-            discounting=0.97, learning_rate=3e-4, entropy_cost=1e-3, num_envs=128,
-            batch_size=8, seed=0)
+            ppo.train, num_timesteps=args.num_timesteps, num_evals=args.num_evals, reward_scaling=args.reward_scaling,
+            episode_length=args.episode_length, normalize_observations=args.normalize_observations, action_repeat=args.action_repeat,
+            unroll_length=args.unroll_length, num_minibatches=args.num_minibatches, num_updates_per_batch=args.num_updates_per_batch,
+            discounting=args.discounting, learning_rate=args.learning_rate, entropy_cost=args.entropy_cost, num_envs=args.num_envs,
+            batch_size=args.batch_size, seed=args.seed)
 
 
     from datetime import datetime
@@ -207,21 +213,6 @@ if __name__ == '__main__':
     def progress(num_steps, metrics):
         print(f"training {num_steps}: {metrics['eval/episode_reward']}")
         wandb.log(metrics)
-      # times.append(datetime.now())
-      # x_data.append(num_steps)
-      # y_data.append(metrics['eval/episode_reward'])
-      # ydataerr.append(metrics['eval/episode_reward_std'])
-      #
-      # plt.xlim([0, train_fn.keywords['num_timesteps'] * 1.25])
-      # # plt.ylim([min_y, max_y])
-      #
-      # plt.xlabel('# environment steps')
-      # plt.ylabel('reward per episode')
-      # plt.title(f'y={y_data[-1]:.3f}')
-      #
-      # plt.errorbar(
-      #     x_data, y_data, yerr=ydataerr)
-      # plt.show()
 
     make_inference_fn, params, _= train_fn(environment=env, progress_fn=progress)
 

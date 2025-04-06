@@ -11,36 +11,35 @@ metric:
 parameters:
   # Parameters to sweep
   reward_scaling:
-    values: [400.0, 800.0, 1200.0]
+    values: [0.01, 0.1, 1, 10, 100]
   learning_rate:
-    values: [1e-4, 3e-4, 1e-3]
+    value: 0.001
   entropy_cost:
-    values: [1e-4, 1e-3, 1e-2]
+    value: 0.001
   num_minibatches:
-    values: [128, 256, 512]
+    value: 256
   batch_size:
-    values: [8, 16, 32]
+    value: 32
   normalize_observations:
     values:
-      - true
       - false
 
   # Fixed parameters
   num_timesteps:
-    value: 2000000
+    value: 20000000
   num_evals:
     value: 20
   episode_length:
-    value: 1000
+    value: 600
   unroll_length:
-    value: 10
+    values: [10, 20, 40, 80, 160]
   num_updates_per_batch:
-    value: 1
+    values: [1, 2, 4, 8]
   num_envs:
-    value: 128
+    value: 256
   seed:
     value: 0
   action_repeat:
-    value: 5
+    values: [1, 2, 4, 8, 16]
   discounting:
     value: 0.99
