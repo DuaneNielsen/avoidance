@@ -231,17 +231,20 @@ if __name__ == '__main__':
     model_path = '/tmp/mjx_brax_policy'
     model.save_params(model_path, params)
 
-    if args.dev:
-        print("rollout policy")
-        params = model.load_params(model_path)
+    print("rollout policy")
+    params = model.load_params(model_path)
 
-        inference_fn = make_inference_fn(params)
-        jit_inference_fn = jax.jit(inference_fn)
+    inference_fn = make_inference_fn(params)
+    jit_inference_fn = jax.jit(inference_fn)
 
-        eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
+    eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
 
-        reward = rollout(env, jit_inference_fn, "eval_ppo.mp4")
-        print(f'eval reward: {reward}')
+    output_filename = "eval_ppo.mp4"
+    reward = rollout(env, jit_inference_fn, output_filename)
+    print(f'eval reward: {reward}')
+
+    wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
+    print('complete')
 
     # jit_reset = jax.jit(eval_env.reset)
     # jit_step = jax.jit(eval_env.step)
@@ -266,5 +269,3 @@ if __name__ == '__main__':
     # output_filename = "eval_ppo.mp4"
     # media.write_video(output_filename, env.render(rollout[::render_every]), fps=1.0 / env.dt / render_every)
     #
-    # wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
-    # print('complete')
