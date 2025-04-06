@@ -64,7 +64,7 @@ def forestnav_xml(
       </option>
     
       <default>
-        <joint damping="0.25" stiffness="0.25"/>
+        <joint damping="0.25" stiffness="1.0"/>
       </default>
       
       <worldbody>

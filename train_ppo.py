@@ -214,18 +214,11 @@ if __name__ == '__main__':
             discounting=args.discounting, learning_rate=args.learning_rate, entropy_cost=args.entropy_cost, num_envs=args.num_envs,
             batch_size=args.batch_size, seed=args.seed, wrap_env=True, wrap_env_fn=brax.envs.wrappers.training.wrap)
 
-    from datetime import datetime
-
-    times = [datetime.now()]
-    x_data = []
-    y_data = []
-    ydataerr = []
-
     def progress(num_steps, metrics):
         print(f"training {num_steps}: {metrics['eval/episode_reward']}")
         wandb.log(metrics)
 
-    make_inference_fn, params, _= train_fn(environment=env, progress_fn=progress)
+    make_inference_fn, params, _ = train_fn(environment=env, progress_fn=progress)
 
     # save model
     model_path = '/tmp/mjx_brax_policy'
@@ -245,27 +238,3 @@ if __name__ == '__main__':
 
     wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
     print('complete')
-
-    # jit_reset = jax.jit(eval_env.reset)
-    # jit_step = jax.jit(eval_env.step)
-    #
-    # # initialize the state
-    # rng = jax.random.PRNGKey(0)
-    # state = jit_reset(rng)
-    # rollout = [state.pipeline_state]
-    #
-    # # grab a trajectory
-    # render_every = 2
-    #
-    # for i in range(args.episode_length):
-    #     act_rng, rng = jax.random.split(rng)
-    #     ctrl, _ = jit_inference_fn(state.obs, act_rng)
-    #     state = jit_step(state, ctrl)
-    #     rollout.append(state.pipeline_state)
-    #
-    #     if state.done:
-    #         break
-    #
-    # output_filename = "eval_ppo.mp4"
-    # media.write_video(output_filename, env.render(rollout[::render_every]), fps=1.0 / env.dt / render_every)
-    #
