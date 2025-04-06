@@ -54,12 +54,13 @@ class ForestNav(PipelineEnv):
         vehicle_frame_goal_pos = data.sensordata[6:9]
         collision_sensor = data.sensordata[9]
         rangefinder = data.sensordata[10:]
+        rangefinder_norm = jnp.where(rangefinder == -1., self.MAX_DISTANCE, rangefinder) / self.MAX_DISTANCE
         # goal_pos_in_vehicle_frame = data.sensordata[3:6]
         goal_vec_normalized, dist = mjxmath.normalize_with_norm(vehicle_frame_goal_pos)
         goal_vec_normalized_x = jnp.clip(goal_vec_normalized[0], -1.0, 1.0)
         angle_to_goal = - jnp.arcsin(goal_vec_normalized_x)
         # obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1) / self.MAX_DISTANCE])
-        obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1)/self.MAX_DISTANCE, rangefinder])
+        obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1)/self.MAX_DISTANCE, rangefinder_norm])
         # dist = distance(vehicle_pos, goal_pos)
         # obs = jnp.concat([dist.reshape(1)/self.MAX_DISTANCE, rangefinder])
         # obs = rangefinder
