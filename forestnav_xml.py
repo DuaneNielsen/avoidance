@@ -60,11 +60,11 @@ def forestnav_xml(
       </asset>
     
       <option timestep="0.02">
-        <flag contact="disable" />
+        <!--flag contact="disable" /-->
       </option>
     
       <default>
-        <joint damping="0.25" stiffness="0.0"/>
+        <joint damping="0.25" stiffness="0.25"/>
       </default>
       
       <worldbody>
@@ -81,6 +81,8 @@ def forestnav_xml(
           <joint name="rot_joint" type="hinge" axis="0 0 1."/>
           <site name="velocity_site" pos="0 0 0" size="0.01"/>
           <frame pos="0 0.01 0" quat="-1 1 0 0">
+          <geom name="vehicle_body" type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.1"/>
+          <site name="vehicle_collision_site" type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.0"/>
           """
 
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
@@ -91,8 +93,9 @@ def forestnav_xml(
 
     xml += f"""
           </frame>
-          <geom type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.1"/>
         </body>
+        
+        <!-- goal -->
         <geom name="goal" pos="1. 1. 0" type="sphere" size="0.07" material="goal_material"/>
     """
 
@@ -105,6 +108,7 @@ def forestnav_xml(
       <framepos name="vehicle_pos" objtype="body" objname="vehicle"/>
       <framepos name="goal_pos" objtype="geom" objname="goal"/>
       <framepos name="goalvec" objtype="geom" objname="goal" reftype="site" refname="velocity_site"/>
+      <touch name="vehicle_collision" site="vehicle_collision_site"/>
       """
 
     for i in range(num_sensors):
@@ -189,9 +193,11 @@ if __name__ == '__main__':
 
     # Create visualization options
     scene_option = mujoco.MjvOption()
-    scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
+    # scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
     scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
     scene_option.frame = mujoco.mjtFrame.mjFRAME_SITE
+    scene_option.flags[mujoco.mjtVisFlag.mjVIS_ACTIVATION] = True
+    scene_option.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = True
 
     # Renderer dimensions - match with the offscreen buffer size
     width, height = 480, 480  # swapped to match the XML sizes
@@ -201,6 +207,7 @@ if __name__ == '__main__':
     rangefinder_data = []
     joint_angle_data = []
     goal_pos_in_body_frame = []
+    collision_data = []
 
     # Reset simulation
     mujoco.mj_resetData(mj_model, mj_data)
@@ -225,7 +232,9 @@ if __name__ == '__main__':
             vehicle_pos = mjx_data.sensordata[:3]
             goal_pos = mjx_data.sensordata[3:6]
             goal_vec_in_vehicle_frame = mjx_data.sensordata[6:9]
-            rangefinder = mjx_data.sensordata[9:]
+            collision_sensor = mjx_data.sensordata[9]
+            rangefinder = mjx_data.sensordata[10:]
+
             goal_vec_normalized, distance = normalize_with_norm(goal_vec_in_vehicle_frame)
             ctrl_rotation_vel = - jnp.arcsin(goal_vec_normalized[0])
             ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
@@ -242,7 +251,8 @@ if __name__ == '__main__':
             time_points.append(mj_data.time)
             rangefinder_data.append(np.array(rangefinder))
             joint_angle_data.append(mj_data.qpos[2])
-            goal_pos_in_body_frame.append(mj_data.sensordata[:3])
+            goal_pos_in_body_frame.append(goal_vec_in_vehicle_frame)
+            collision_data.append(collision_sensor)
 
             # Render the frame
             renderer.update_scene(mj_data, camera=cam, scene_option=scene_option)
@@ -255,10 +265,10 @@ if __name__ == '__main__':
     print(f"Video saved to {output_filename}")
 
     # Plot rangefinder readings and joint position
-    plt.figure(figsize=(12, 8))
-    #
+    plt.figure(figsize=(12, 10))
+
     # Plot rangefinder readings
-    plt.subplot(3, 1, 1)
+    plt.subplot(4, 1, 1)
     rangefinder_data = np.stack(rangefinder_data)
     plt.imshow(rangefinder_data.T)
     min_idx = 0  # First element (most negative angle)
@@ -274,26 +284,32 @@ if __name__ == '__main__':
     plt.xlabel('Time (s)')
     plt.ylabel('Angle (m)')
     plt.title('Rangefinder Readings')
-    # plt.legend()
     plt.grid(True)
 
     # Plot joint angle
-    plt.subplot(3, 1, 2)
+    plt.subplot(4, 1, 2)
     plt.plot(time_points, joint_angle_data, label='Joint Angle', color='green', linewidth=2)
     plt.xlabel('Time (s)')
     plt.ylabel('Angle (rad)')
     plt.title('Joint Angle')
     plt.grid(True)
 
-    plt.subplot(3, 1, 3)
+    plt.subplot(4, 1, 3)
     plt.plot(time_points, goal_pos_in_body_frame, label='Goal Pos', color='green', linewidth=2)
     plt.xlabel('Time (s)')
-    plt.ylabel('Angle (rad)')
+    plt.ylabel('Position')
     plt.title('Goal pos in body frame')
+    plt.grid(True)
+
+    # Plot collision data
+    plt.subplot(4, 1, 4)
+    plt.plot(time_points, collision_data, label='Collision', color='red', linewidth=2)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Collision (0/1)')
+    plt.title('Vehicle Collisions')
+    plt.ylim(-0.1, 1.1)  # Since it's binary data
     plt.grid(True)
 
     plt.tight_layout()
     plt.savefig('rangefinder_data.png')
     plt.show()
-
-    print("Simulation complete!")

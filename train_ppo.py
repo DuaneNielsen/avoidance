@@ -19,7 +19,8 @@ from brax import envs
 from brax import math
 import mujoco.mjx._src.math as mjxmath
 import argparse
-
+import brax.envs.wrappers.training
+import mediapy as media
 
 sensor_angle = 0.6
 num_sensors = 64
@@ -51,13 +52,14 @@ class ForestNav(PipelineEnv):
         vehicle_pos = data.sensordata[:3]
         goal_pos = data.sensordata[3:6]
         vehicle_frame_goal_pos = data.sensordata[6:9]
-        rangefinder = data.sensordata[9:]
+        collision_sensor = data.sensordata[9]
+        rangefinder = data.sensordata[10:]
         # goal_pos_in_vehicle_frame = data.sensordata[3:6]
         goal_vec_normalized, dist = mjxmath.normalize_with_norm(vehicle_frame_goal_pos)
         goal_vec_normalized_x = jnp.clip(goal_vec_normalized[0], -1.0, 1.0)
         angle_to_goal = - jnp.arcsin(goal_vec_normalized_x)
-        obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1) / self.MAX_DISTANCE])
-        # obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1)/self.MAX_DISTANCE, rangefinder])
+        # obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1) / self.MAX_DISTANCE])
+        obs = jnp.concat([angle_to_goal.reshape(1), dist.reshape(1)/self.MAX_DISTANCE, rangefinder])
         # dist = distance(vehicle_pos, goal_pos)
         # obs = jnp.concat([dist.reshape(1)/self.MAX_DISTANCE, rangefinder])
         # obs = rangefinder
@@ -76,8 +78,9 @@ class ForestNav(PipelineEnv):
         data0 = state.pipeline_state
         data = self.pipeline_step(data0, action)
         obs, distance = self._obs(data)
+        collision_sensor = data.sensordata[9]
         reward = self.MAX_DISTANCE - distance
-        done = jnp.array(data.time > 20., dtype=jnp.float32)
+        done = jnp.where(collision_sensor > 0., 1., 0.)
 
         state.metrics.update(
             reward=reward,
@@ -107,11 +110,11 @@ def setup_parser():
     # Environment settings
     parser.add_argument('--normalize_observations', action='store_false', default=False,
                         help='Whether to normalize observations')
-    parser.add_argument('--action_repeat', type=int, default=5,
+    parser.add_argument('--action_repeat', type=int, default=1,
                         help='Number of times to repeat actions')
 
     # PPO algorithm parameters
-    parser.add_argument('--unroll_length', type=int, default=10,
+    parser.add_argument('--unroll_length', type=int, default=20,
                         help='Length of segments to train on')
     parser.add_argument('--num_minibatches', type=int, default=256,
                         help='Number of minibatches to use per update')
@@ -137,11 +140,35 @@ def setup_parser():
     return parser
 
 
+def rollout(env, policy, mp4_filename):
+    wrapped_env = brax.envs.wrappers.training.wrap(env)
+
+    jit_reset = jax.jit(wrapped_env.reset)
+    jit_step = jax.jit(wrapped_env.step)
+    vmap_policy = jax.vmap(policy)
+
+    # initialize the state
+    batch_size = 2
+    rng_key, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
+    state = jit_reset(jax.random.split(rng_init, batch_size))
+    rollout = [jax.tree.map(lambda a: a[0], state.pipeline_state)]
+    reward = 0.
+
+    # grab a trajectory
+    for i in range(args.episode_length):
+        rng_key, rng_ctrl = jax.random.split(rng_key)
+        rng_ctrl = jax.random.split(rng_key, batch_size)
+        ctrl, info = vmap_policy(state.obs, rng_ctrl)
+        state = jit_step(state, ctrl)
+        reward += state.reward
+        rollout.append(jax.tree.map(lambda a: a[0], state.pipeline_state))
+
+    media.write_video(mp4_filename, env.render(rollout), fps=1.0 / env.dt)
+    return reward
+
+
 if __name__ == '__main__':
 
-
-    from matplotlib import pyplot as plt
-    import mediapy as media
     import wandb
 
     parser = setup_parser()
@@ -158,50 +185,34 @@ if __name__ == '__main__':
         settings=wandb.Settings(code_dir=".")
     )
 
-    env = envs.get_environment(env_name, sensor_angle=0.6, num_sensors=64)
-
+    env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
 
     if args.dev:
         # define the jit reset/step functions
-        jit_reset = jax.jit(env.reset)
-        jit_step = jax.jit(env.step)
 
-        print("test environment")
-        # initialize the state
-        state = jit_reset(jax.random.PRNGKey(0))
-        rollout = [state.pipeline_state]
-        reward = 0.
+        def policy(obs, rng):
+            return jnp.array([0.6, obs[0]]), None
 
-        # grab a trajectory
-        for i in range(args.episode_length):
-            ctrl = -0.1 * jnp.ones(env.sys.nu)
-            ctrl = jnp.array([0.6, state.obs[0]])
-            state = jit_step(state, ctrl)
-            reward += state.reward
-            rollout.append(state.pipeline_state)
-
-        print(f'test reward: {reward}')
-        output_filename = "rollout_ppo.mp4"
-        media.write_video(output_filename, env.render(rollout), fps=1.0 / env.dt)
-
-    print('start training')
+        print("dev mode - testing environment")
+        reward = rollout(env, policy, 'dev_rollout.mp4')
+        print(f"dev reward: {reward}")
 
     if args.dev:
-        print('dev mode')
+        print('dev mode - training')
         train_fn = partial(
             ppo.train, num_timesteps=5000, num_evals=5, reward_scaling=800.,
             episode_length=500, normalize_observations=True, action_repeat=5,
             unroll_length=10, num_minibatches=32, num_updates_per_batch=1,
             discounting=0.97, learning_rate=3e-4, entropy_cost=1e-3, num_envs=32,
-            batch_size=8, seed=0)
+            batch_size=8, seed=0, wrap_env=True, wrap_env_fn=brax.envs.wrappers.training.wrap)
     else:
+        print('start training')
         train_fn = partial(
             ppo.train, num_timesteps=args.num_timesteps, num_evals=args.num_evals, reward_scaling=args.reward_scaling,
             episode_length=args.episode_length, normalize_observations=args.normalize_observations, action_repeat=args.action_repeat,
             unroll_length=args.unroll_length, num_minibatches=args.num_minibatches, num_updates_per_batch=args.num_updates_per_batch,
             discounting=args.discounting, learning_rate=args.learning_rate, entropy_cost=args.entropy_cost, num_envs=args.num_envs,
-            batch_size=args.batch_size, seed=args.seed)
-
+            batch_size=args.batch_size, seed=args.seed, wrap_env=True, wrap_env_fn=brax.envs.wrappers.training.wrap)
 
     from datetime import datetime
 
@@ -219,37 +230,41 @@ if __name__ == '__main__':
     # save model
     model_path = '/tmp/mjx_brax_policy'
     model.save_params(model_path, params)
-    params = model.load_params(model_path)
 
-    print("rollout policy")
+    if args.dev:
+        print("rollout policy")
+        params = model.load_params(model_path)
 
-    inference_fn = make_inference_fn(params)
-    jit_inference_fn = jax.jit(inference_fn)
+        inference_fn = make_inference_fn(params)
+        jit_inference_fn = jax.jit(inference_fn)
 
-    eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
+        eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
 
-    jit_reset = jax.jit(eval_env.reset)
-    jit_step = jax.jit(eval_env.step)
+        reward = rollout(env, jit_inference_fn, "eval_ppo.mp4")
+        print(f'eval reward: {reward}')
 
-    # initialize the state
-    rng = jax.random.PRNGKey(0)
-    state = jit_reset(rng)
-    rollout = [state.pipeline_state]
-
-    # grab a trajectory
-    render_every = 2
-
-    for i in range(args.episode_length):
-        act_rng, rng = jax.random.split(rng)
-        ctrl, _ = jit_inference_fn(state.obs, act_rng)
-        state = jit_step(state, ctrl)
-        rollout.append(state.pipeline_state)
-
-        if state.done:
-            break
-
-    output_filename = "eval_ppo.mp4"
-    media.write_video(output_filename, env.render(rollout[::render_every]), fps=1.0 / env.dt / render_every)
-
-    wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
-    print('complete')
+    # jit_reset = jax.jit(eval_env.reset)
+    # jit_step = jax.jit(eval_env.step)
+    #
+    # # initialize the state
+    # rng = jax.random.PRNGKey(0)
+    # state = jit_reset(rng)
+    # rollout = [state.pipeline_state]
+    #
+    # # grab a trajectory
+    # render_every = 2
+    #
+    # for i in range(args.episode_length):
+    #     act_rng, rng = jax.random.split(rng)
+    #     ctrl, _ = jit_inference_fn(state.obs, act_rng)
+    #     state = jit_step(state, ctrl)
+    #     rollout.append(state.pipeline_state)
+    #
+    #     if state.done:
+    #         break
+    #
+    # output_filename = "eval_ppo.mp4"
+    # media.write_video(output_filename, env.render(rollout[::render_every]), fps=1.0 / env.dt / render_every)
+    #
+    # wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
+    # print('complete')
