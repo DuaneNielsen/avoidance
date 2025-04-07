@@ -67,7 +67,7 @@ class ForestNav(PipelineEnv):
         return obs, dist
 
     def reset(self, rng: jnp.ndarray) -> State:
-        qpos = jnp.array([-1, -1, -jnp.pi / 2])
+        qpos = jnp.array([-0.95, -0.95, -jnp.pi / 2])
         qvel = jnp.zeros(3)
         data = self.pipeline_init(qpos, qvel)
         obs, distance = self._obs(data)

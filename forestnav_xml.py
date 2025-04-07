@@ -64,7 +64,7 @@ def forestnav_xml(
       </option>
     
       <default>
-        <joint damping="0.25" stiffness="0."/>
+        <joint damping="1.0" stiffness="0."/>
       </default>
       
       <worldbody>
@@ -225,7 +225,7 @@ if __name__ == '__main__':
 
         target_vel, target_rotation_vel = 0.6, 1.
 
-        mjx_data = mjx_data.replace(qpos=jnp.array([-1, -1, -jnp.pi/2]))
+        mjx_data = mjx_data.replace(qpos=jnp.array([-1, -1, -jnp.pi/2]), qvel=jnp.zeros(3))
 
         for i in trange(n_frames):
 
