@@ -21,7 +21,7 @@ parameters:
   batch_size:
     values: [8, 32, 128]
   normalize_observations:
-    values:
+    value:
       - false
 
   # Fixed parameters
@@ -32,7 +32,7 @@ parameters:
   episode_length:
     value: 300
   unroll_length:
-    values: 40
+    value: 40
   num_updates_per_batch:
     value: 4
   num_envs:
