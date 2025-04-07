@@ -53,7 +53,7 @@ def forestnav_xml(
       <option integrator="implicitfast"/>
     
       <asset>
-        <material name="body_material" rgba="0.2 0.8 0.2 1"/>
+        <material name="body_material" rgba="0.5 0.5 0.9 1"/>
         <material name="obstacle_material" rgba="0.8 0.2 0.2 1"/>
         <material name="goal_material" rgba="0.3 0.9 0.2 1"/>
         <material name="floor_material" rgba="0.3 0.3 0.3 1"/>
@@ -64,7 +64,7 @@ def forestnav_xml(
       </option>
     
       <default>
-        <joint damping="0.25" stiffness="1.0"/>
+        <joint damping="0.25" stiffness="0."/>
       </default>
       
       <worldbody>
@@ -81,8 +81,8 @@ def forestnav_xml(
           <joint name="rot_joint" type="hinge" axis="0 0 1."/>
           <site name="velocity_site" pos="0 0 0" size="0.01"/>
           <frame pos="0 0.01 0" quat="-1 1 0 0">
-          <geom name="vehicle_body" type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.1"/>
-          <site name="vehicle_collision_site" type="box" pos="0 0 0" size=".0168 .01 .005" mass="0.0"/>
+          <geom name="vehicle_body" type="sphere" pos="0 0 0" size="0.015" mass="0.1" material="body_material"/>
+          <site name="vehicle_collision_site" type="sphere" pos="0 0 0" size="0.016" mass="0.0" material="body_material"/>
           """
 
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
@@ -238,6 +238,7 @@ if __name__ == '__main__':
             goal_vec_normalized, distance = normalize_with_norm(goal_vec_in_vehicle_frame)
             ctrl_rotation_vel = - jnp.arcsin(goal_vec_normalized[0])
             ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
+            jax.debug.print('{}',ctrl)
             mjx_data = mjx_data.replace(ctrl=ctrl)
 
             # Run multiple steps between frames

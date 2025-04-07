@@ -4,22 +4,22 @@ command:
   - ${program}
   - ${args_no_boolean_flags}
 method: grid
-name: ppo-parameter-sweep
+name: parameter_sweep
 metric:
   name: eval/episode_reward
   goal: maximize
 parameters:
   # Parameters to sweep
   reward_scaling:
-    values: [0.01, 0.1, 1, 10, 100]
+    value: 1
   learning_rate:
-    value: 0.001
+    value: 3e-4
   entropy_cost:
-    value: 0.001
+    values: [1e-4, 1e-3, 1e-2]
   num_minibatches:
-    value: 256
+    values: [128, 256, 512]
   batch_size:
-    value: 32
+    values: [8, 32, 128]
   normalize_observations:
     values:
       - false
@@ -30,16 +30,16 @@ parameters:
   num_evals:
     value: 20
   episode_length:
-    value: 600
+    value: 300
   unroll_length:
-    values: [10, 20, 40, 80, 160]
+    values: 40
   num_updates_per_batch:
-    values: [1, 2, 4, 8]
+    value: 4
   num_envs:
-    value: 256
+    value: 512
   seed:
     value: 0
   action_repeat:
-    values: [1, 2, 4, 8, 16]
+    value: 1
   discounting:
     value: 0.99
