@@ -35,7 +35,7 @@ def obstacles_grid_xml(skip_pos: List[float]=None, radius=0.07):
         xml += f"""
         <!-- Obstacle {i} -->
         <geom name="obstacle_{i}" type="sphere" pos="{x} {y} 0" 
-              size="{radius}" contype="1" conaffinity="1" material="obstacle_material"/>
+              size="{radius}" contype="1" conaffinity="1" material="obstacle_material" solimp="0.9 0.95 0.001" solref="0.004 1"/>
     """
     return xml
 
@@ -76,13 +76,14 @@ def forestnav_xml(
     
         <!-- stacked joint: hinge + slide -->
         <body pos="0.0 0 0" name="vehicle">
-          <joint name="x_joint" type="slide" axis="1. 0. 0." range="-1 1"/>
-          <joint name="y_joint" type="slide" axis="0. 1. 0." range="-1 1"/>
+          <joint name="x_joint" type="slide" axis="1. 0. 0." range="-2 2"/>
+          <joint name="y_joint" type="slide" axis="0. 1. 0." range="-2 2"/>
           <joint name="rot_joint" type="hinge" axis="0 0 1."/>
           <site name="velocity_site" pos="0 0 0" size="0.01"/>
           <frame pos="0 0.01 0" quat="-1 1 0 0">
-          <geom name="vehicle_body" type="sphere" pos="0 0 0" size="0.015" mass="0.1" material="body_material"/>
-          <site name="vehicle_collision_site" type="sphere" pos="0 0 0" size="0.016" mass="0.0" material="body_material"/>
+          <geom name="vehicle_body" type="sphere" pos="0 0 0" size="0.015" mass="0.5" material="body_material"/>
+          <site name="vehicle_collision_site" type="sphere" pos="0 0 0" size="0.016" mass="0." material="body_material" contype="1" conaffinity="1" 
+                solimp="0.9 0.95 0.001" solref="0.004 1"/>
           """
 
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
@@ -96,7 +97,7 @@ def forestnav_xml(
         </body>
         
         <!-- goal -->
-        <geom name="goal" pos="1. 1. 0" type="sphere" size="0.07" material="goal_material"/>
+        <geom name="goal" pos="0.5 0.5 0" type="sphere" size="0.07" material="goal_material"/>
     """
 
     xml += obstacles_xml_f()
@@ -160,7 +161,7 @@ if __name__ == '__main__':
     num_sensors = 64
     rangefinder_angles = np.linspace(start=-sensor_angle, stop=sensor_angle, num=num_sensors)
 
-    obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.), (1., 1.)], 0.07)
+    obstacles_gen_f = partial(obstacles_grid_xml, [(-1., -1.), (0.5, 0.5)], 0.07)
 
     xml = forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
 

@@ -40,7 +40,7 @@ def distance(vehicle_pos, goal_pos):
 
 class ForestNav(PipelineEnv):
     def __init__(self, sensor_angle, num_sensors, **kwargs):
-        obstacles_gen_f = partial(forestnav_xml.obstacles_grid_xml, [(-1., -1.), (1., 1.)], 0.07)
+        obstacles_gen_f = partial(forestnav_xml.obstacles_grid_xml, [(-1., -1.), (0.5, 0.5)], 0.07)
         xml = forestnav_xml.forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
 
         mj_model = mujoco.MjModel.from_xml_string(xml)
