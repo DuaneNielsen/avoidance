@@ -97,7 +97,7 @@ def forestnav_xml(
         </body>
         
         <!-- goal -->
-        <geom name="goal" pos="0.5 0.5 0" type="sphere" size="0.07" material="goal_material"/>
+        <geom name="goal" pos="0.5 0.5 0" type="sphere" size="0.07" material="goal_material" contype="2"/>
     """
 
     xml += obstacles_xml_f()
