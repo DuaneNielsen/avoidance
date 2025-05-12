@@ -1,5 +1,7 @@
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
+
 import forestnav_xml
 from brax.training.agents.ppo import train as ppo
 from brax.training.agents.ppo import networks as ppo_networks
@@ -99,13 +101,13 @@ def setup_parser():
     parser = argparse.ArgumentParser(description='Train a PPO agent')
 
     # Core training parameters
-    parser.add_argument('--num_timesteps', type=int, default=20_000_000,
+    parser.add_argument('--num_timesteps', type=int, default=40_000_000,
                         help='Total number of environment timesteps to train for')
     parser.add_argument('--num_evals', type=int, default=20,
                         help='Number of evaluation episodes during training')
     parser.add_argument('--reward_scaling', type=float, default=1.0,
                         help='Scaling factor for rewards')
-    parser.add_argument('--episode_length', type=int, default=600,
+    parser.add_argument('--episode_length', type=int, default=400,
                         help='Maximum length of an episode')
 
     # Environment settings
@@ -115,23 +117,25 @@ def setup_parser():
                         help='Number of times to repeat actions')
 
     # PPO algorithm parameters
-    parser.add_argument('--unroll_length', type=int, default=20,
-                        help='Length of segments to train on')
-    parser.add_argument('--num_minibatches', type=int, default=256,
+
+    parser.add_argument('--num_minibatches', type=int, default=512,
                         help='Number of minibatches to use per update')
-    parser.add_argument('--num_updates_per_batch', type=int, default=1,
+    parser.add_argument('--unroll_length', type=int, default=40,
+                        help='Length of segments to train on')
+    parser.add_argument('--num_updates_per_batch', type=int, default=4,
                         help='Number of passes over each batch')
     parser.add_argument('--discounting', type=float, default=0.99,
                         help='Discount factor for future rewards')
-    parser.add_argument('--learning_rate', type=float, default=0.001,
+    parser.add_argument('--learning_rate', type=float, default=0.0003,
                         help='Learning rate for optimizer')
-    parser.add_argument('--entropy_cost', type=float, default=0.001,
+    parser.add_argument('--entropy_cost', type=float, default=0.0001,
                         help='Entropy regularization coefficient')
 
+
     # Parallelization settings
-    parser.add_argument('--num_envs', type=int, default=256,
+    parser.add_argument('--num_envs', type=int, default=512,
                         help='Number of parallel environments to run')
-    parser.add_argument('--batch_size', type=int, default=32,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for training')
 
     # Misc
@@ -154,6 +158,7 @@ def rollout(env, policy, mp4_filename):
     state = jit_reset(jax.random.split(rng_init, batch_size))
     rollout = [jax.tree.map(lambda a: a[0], state.pipeline_state)]
     reward = 0.
+    ctrl_seq = []
 
     # grab a trajectory
     for i in range(args.episode_length):
@@ -163,7 +168,14 @@ def rollout(env, policy, mp4_filename):
         state = jit_step(state, ctrl)
         reward += state.reward
         rollout.append(jax.tree.map(lambda a: a[0], state.pipeline_state))
+        ctrl_seq += [ctrl[0]]
+        if state.done[0]:
+            break
 
+    ctrl_seq = jnp.stack(ctrl_seq)
+    fig, ax = plt.subplots()
+    ax.plot(ctrl_seq)
+    wandb.log({'ctrl_traj': fig})
     media.write_video(mp4_filename, env.render(rollout), fps=1.0 / env.dt)
     return reward
 
