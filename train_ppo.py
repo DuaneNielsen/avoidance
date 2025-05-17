@@ -27,6 +27,8 @@ import mediapy as media
 sensor_angle = 0.6
 num_sensors = 64
 
+COLLISION_SENSOR = 9
+RANGEFINDER_0 = 10
 
 # model, data = forestnav_xml.make_forest_v1(sensor_angle, num_sensors)
 #
@@ -54,8 +56,8 @@ class ForestNav(PipelineEnv):
         vehicle_pos = data.sensordata[:3]
         goal_pos = data.sensordata[3:6]
         vehicle_frame_goal_pos = data.sensordata[6:9]
-        collision_sensor = data.sensordata[9]
-        rangefinder = data.sensordata[10:]
+        collision_sensor = data.sensordata[COLLISION_SENSOR]
+        rangefinder = data.sensordata[RANGEFINDER_0:]
         rangefinder_norm = jnp.where(rangefinder == -1., self.MAX_DISTANCE, rangefinder) / self.MAX_DISTANCE
         # goal_pos_in_vehicle_frame = data.sensordata[3:6]
         goal_vec_normalized, dist = mjxmath.normalize_with_norm(vehicle_frame_goal_pos)
@@ -159,6 +161,9 @@ def rollout(env, policy, mp4_filename):
     rollout = [jax.tree.map(lambda a: a[0], state.pipeline_state)]
     reward = 0.
     ctrl_seq = []
+    xy_pos = []
+    reward_seq = []
+    collision_seq = []
 
     # grab a trajectory
     for i in range(args.episode_length):
@@ -167,15 +172,26 @@ def rollout(env, policy, mp4_filename):
         ctrl, info = vmap_policy(state.obs, rng_ctrl)
         state = jit_step(state, ctrl)
         reward += state.reward
+        reward_seq += [state.reward[0]]
         rollout.append(jax.tree.map(lambda a: a[0], state.pipeline_state))
         ctrl_seq += [ctrl[0]]
+        xy_pos += [state.pipeline_state.qpos[0, 0:2]]
+        collision_seq += [state.pipeline_state.sensordata[0, COLLISION_SENSOR]]
+
         if state.done[0]:
             break
 
-    ctrl_seq = jnp.stack(ctrl_seq)
-    fig, ax = plt.subplots()
-    ax.plot(ctrl_seq)
-    wandb.log({'ctrl_traj': fig})
+    def wandb_log_plot(plt_name, data):
+        ctrl_seq = jnp.stack(data)
+        fig, ax = plt.subplots()
+        ax.plot(ctrl_seq)
+        wandb.log({plt_name: fig})
+
+    wandb_log_plot('ctrl_traj', ctrl_seq)
+    wandb_log_plot('xy_pos', xy_pos)
+    wandb_log_plot('reward', reward_seq)
+    wandb_log_plot('collision_sensor', collision_seq)
+
     media.write_video(mp4_filename, env.render(rollout), fps=1.0 / env.dt)
     return reward
 
