@@ -43,12 +43,13 @@ def distance(vehicle_pos, goal_pos):
 
 
 class ForestNav(PipelineEnv):
-    def __init__(self, sensor_angle, num_sensors, **kwargs):
+    def __init__(self, sensor_angle, num_sensors, peturb_scale, **kwargs):
         obstacles_gen_f = partial(forestnav_xml.obstacles_grid_xml, [(-1., -1.), (0.5, 0.5)], 0.07)
         xml = forestnav_xml.forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
 
-        mj_model = mujoco.MjModel.from_xml_string(xml)
-        sys = mjcf.load_model(mj_model)
+        self.peturb_scale = peturb_scale
+        self.mj_model = mujoco.MjModel.from_xml_string(xml)
+        sys = mjcf.load_model(self.mj_model)
         self.MAX_DISTANCE = 2.83
         super().__init__(sys, **kwargs)
 
@@ -74,6 +75,16 @@ class ForestNav(PipelineEnv):
         qpos = jnp.array([-0.95, -0.95, -jnp.pi / 2])
         qvel = jnp.zeros(3)
         data = self.pipeline_init(qpos, qvel)
+        # jax.debug.print('initial geoms {}', data.geom_xpos)
+        perturbations = jax.random.uniform(
+            rng, shape=data.geom_xpos.shape, minval=-self.peturb_scale, maxval=self.peturb_scale
+        )
+        perturbations = perturbations.at[:, 3].set(0.)
+        # jax.debug.print('peturbutions {}', perturbations)
+        peturbed_state = data.geom_xpos + perturbations
+        data = data.replace(geom_xpos=peturbed_state)
+        # jax.debug.print('final geoms {}', data.geom_xpos)
+
         obs, distance = self._obs(data)
         reward, done, zero = jnp.zeros(3)
         metrics = {'reward': zero}
@@ -117,6 +128,8 @@ def setup_parser():
                         help='Whether to normalize observations')
     parser.add_argument('--action_repeat', type=int, default=1,
                         help='Number of times to repeat actions')
+    parser.add_argument('--peturb_scale', type=int, default=0.1,
+                        help='Max distance to randomly peturb the obstacles')
 
     # PPO algorithm parameters
 
@@ -214,7 +227,11 @@ if __name__ == '__main__':
         settings=wandb.Settings(code_dir=".")
     )
 
-    env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
+    env = envs.get_environment(env_name,
+                               sensor_angle=sensor_angle,
+                               num_sensors=num_sensors,
+                               peturb_scale=args.peturb_scale
+                               )
 
     if args.dev:
         # define the jit reset/step functions
@@ -259,10 +276,10 @@ if __name__ == '__main__':
     inference_fn = make_inference_fn(params)
     jit_inference_fn = jax.jit(inference_fn)
 
-    eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors)
+    eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors, peturb_scale=args.peturb_scale)
 
     output_filename = "eval_ppo.mp4"
-    reward = rollout(env, jit_inference_fn, output_filename)
+    reward = rollout(eval_env, jit_inference_fn, output_filename)
     print(f'eval reward: {reward}')
 
     wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
