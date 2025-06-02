@@ -72,17 +72,12 @@ class ForestNav(PipelineEnv):
         return obs, dist
 
     def reset(self, rng: jnp.ndarray) -> State:
-        qpos = jnp.array([-0.95, -0.95, -jnp.pi / 2])
-        qvel = jnp.zeros(3)
-        data = self.pipeline_init(qpos, qvel)
+        vehicle_init = jnp.array([-0.95, -0.95, -jnp.pi / 2])
+        obstacles_init = (jax.random.uniform(rng, (49-3,)) - 0.5) * self.peturb_scale
+        qpos_init = jnp.concatenate([vehicle_init, obstacles_init])
+        qvel = jnp.zeros_like(qpos_init)
+        data = self.pipeline_init(qpos_init, qvel)
         # jax.debug.print('initial geoms {}', data.geom_xpos)
-        perturbations = jax.random.uniform(
-            rng, shape=data.geom_xpos.shape, minval=-self.peturb_scale, maxval=self.peturb_scale
-        )
-        perturbations = perturbations.at[:, 3].set(0.)
-        # jax.debug.print('peturbutions {}', perturbations)
-        peturbed_state = data.geom_xpos + perturbations
-        data = data.replace(geom_xpos=peturbed_state)
         # jax.debug.print('final geoms {}', data.geom_xpos)
 
         obs, distance = self._obs(data)
@@ -128,7 +123,7 @@ def setup_parser():
                         help='Whether to normalize observations')
     parser.add_argument('--action_repeat', type=int, default=1,
                         help='Number of times to repeat actions')
-    parser.add_argument('--peturb_scale', type=int, default=0.1,
+    parser.add_argument('--peturb_scale', type=int, default=0.3,
                         help='Max distance to randomly peturb the obstacles')
 
     # PPO algorithm parameters
@@ -160,7 +155,7 @@ def setup_parser():
     return parser
 
 
-def rollout(env, policy, mp4_filename):
+def rollout(env, policy, mp4_filename, seed=0):
     wrapped_env = brax.envs.wrappers.training.wrap(env)
 
     jit_reset = jax.jit(wrapped_env.reset)
@@ -169,7 +164,7 @@ def rollout(env, policy, mp4_filename):
 
     # initialize the state
     batch_size = 2
-    rng_key, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
+    rng_key, rng_init = jax.random.split(jax.random.PRNGKey(seed), 2)
     state = jit_reset(jax.random.split(rng_init, batch_size))
     rollout = [jax.tree.map(lambda a: a[0], state.pipeline_state)]
     reward = 0.
@@ -240,7 +235,8 @@ if __name__ == '__main__':
             return jnp.array([0.6, obs[0]]), None
 
         print("dev mode - testing environment")
-        reward = rollout(env, policy, 'dev_rollout.mp4')
+        reward = rollout(env, policy, 'dev_rollout_seed_0.mp4', seed=0)
+        reward = rollout(env, policy, 'dev_rollout_seed_1.mp4', seed=1)
         print(f"dev reward: {reward}")
 
     if args.dev:
