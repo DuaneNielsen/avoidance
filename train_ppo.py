@@ -138,14 +138,14 @@ def setup_parser():
                         help='Discount factor for future rewards')
     parser.add_argument('--learning_rate', type=float, default=0.0003,
                         help='Learning rate for optimizer')
-    parser.add_argument('--entropy_cost', type=float, default=0.0001,
+    parser.add_argument('--entropy_cost', type=float, default=0.01,
                         help='Entropy regularization coefficient')
 
 
     # Parallelization settings
     parser.add_argument('--num_envs', type=int, default=512,
                         help='Number of parallel environments to run')
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=128,
                         help='Batch size for training')
 
     # Misc
@@ -154,8 +154,9 @@ def setup_parser():
 
     return parser
 
+import numpy as np
 
-def rollout(env, policy, mp4_filename, seed=0):
+def rollout(env, policy, mp4_filename, seed=0, batch_size=4):
     wrapped_env = brax.envs.wrappers.training.wrap(env)
 
     jit_reset = jax.jit(wrapped_env.reset)
@@ -163,44 +164,44 @@ def rollout(env, policy, mp4_filename, seed=0):
     vmap_policy = jax.vmap(policy)
 
     # initialize the state
-    batch_size = 2
     rng_key, rng_init = jax.random.split(jax.random.PRNGKey(seed), 2)
     state = jit_reset(jax.random.split(rng_init, batch_size))
-    rollout = [jax.tree.map(lambda a: a[0], state.pipeline_state)]
-    reward = 0.
-    ctrl_seq = []
-    xy_pos = []
-    reward_seq = []
-    collision_seq = []
 
-    # grab a trajectory
+    # Store all batch trajectories
+    rollout_batch = [state.pipeline_state]
+    reward = jnp.zeros(batch_size)
+
+    # grab trajectories for all batch members
     for i in range(args.episode_length):
         rng_key, rng_ctrl = jax.random.split(rng_key)
         rng_ctrl = jax.random.split(rng_key, batch_size)
         ctrl, info = vmap_policy(state.obs, rng_ctrl)
         state = jit_step(state, ctrl)
         reward += state.reward
-        reward_seq += [state.reward[0]]
-        rollout.append(jax.tree.map(lambda a: a[0], state.pipeline_state))
-        ctrl_seq += [ctrl[0]]
-        xy_pos += [state.pipeline_state.qpos[0, 0:2]]
-        collision_seq += [state.pipeline_state.sensordata[0, COLLISION_SENSOR]]
+        rollout_batch.append(state.pipeline_state)
 
-        if state.done[0]:
+        if jnp.any(state.done):
             break
 
-    def wandb_log_plot(plt_name, data):
-        ctrl_seq = jnp.stack(data)
-        fig, ax = plt.subplots()
-        ax.plot(ctrl_seq)
-        wandb.log({plt_name: fig})
+    # Render all trajectories sequentially
+    all_frames = []
+    for batch_idx in range(batch_size):
+        # Extract trajectory for this batch member
+        individual_rollout = []
+        for rollout_state in rollout_batch:
+            individual_state = jax.tree.map(lambda x: x[batch_idx], rollout_state)
+            individual_rollout.append(individual_state)
 
-    wandb_log_plot('ctrl_traj', ctrl_seq)
-    wandb_log_plot('xy_pos', xy_pos)
-    wandb_log_plot('reward', reward_seq)
-    wandb_log_plot('collision_sensor', collision_seq)
+        # Render this trajectory
+        trajectory_frames = env.render(individual_rollout)
+        all_frames.extend(trajectory_frames)
 
-    media.write_video(mp4_filename, env.render(rollout), fps=1.0 / env.dt)
+        # Add a few black frames as separator between trajectories
+        if batch_idx < batch_size - 1:
+            black_frame = np.zeros_like(trajectory_frames[0])
+            all_frames.extend([black_frame] * 10)  # 10 frames of black
+
+    media.write_video(mp4_filename, all_frames, fps=1.0 / env.dt)
     return reward
 
 
