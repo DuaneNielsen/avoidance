@@ -34,8 +34,11 @@ def obstacles_grid_xml(skip_pos: List[float]=None, radius=0.07):
     for i, (x, y, radius) in enumerate(obstacles):
         xml += f"""
         <!-- Obstacle {i} -->
-        <geom name="obstacle_{i}" type="sphere" pos="{x} {y} 0" 
-              size="{radius}" contype="1" conaffinity="1" material="obstacle_material" solimp="0.9 0.95 0.001" solref="0.004 1"/>
+        <body pos="{x} {y} 0" name="obstacle_{i}">
+          <joint name="obstacle_{i}_x_joint" type="slide" axis="1. 0. 0."/>
+          <joint name="obstacle_{i}_y_joint" type="slide" axis="0. 1. 0."/>
+          <geom name="obstacle_geom_{i}" type="sphere" pos="0. 0. 0" size="{radius}" contype="1" conaffinity="1" material="obstacle_material" solimp="0.9 0.95 0.001" solref="0.004 1"/>
+        </body>
     """
     return xml
 
@@ -165,6 +168,8 @@ if __name__ == '__main__':
 
     xml = forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
 
+    print(xml)
+
     # Create MuJoCo model and data
     mj_model = mujoco.MjModel.from_xml_string(xml)
     mj_data = mujoco.MjData(mj_model)
@@ -179,7 +184,7 @@ if __name__ == '__main__':
     if test_batch:
         rng = jax.random.PRNGKey(0)
         rng = jax.random.split(rng, 4096)
-        batch = jax.vmap(lambda rng: mjx_data.replace(qpos=jax.random.uniform(rng, (3,))))(rng)
+        batch = jax.vmap(lambda rng: mjx_data.replace(qpos=jax.random.uniform(rng, (49,))))(rng)
 
         vmap_step = jax.jit(jax.vmap(mjx.step, in_axes=(None, 0)))
         batch = vmap_step(mjx_model, batch)
@@ -195,10 +200,10 @@ if __name__ == '__main__':
     # Create visualization options
     scene_option = mujoco.MjvOption()
     # scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
-    scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
-    scene_option.frame = mujoco.mjtFrame.mjFRAME_SITE
-    scene_option.flags[mujoco.mjtVisFlag.mjVIS_ACTIVATION] = True
-    scene_option.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = True
+    # scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
+    # scene_option.frame = mujoco.mjtFrame.mjFRAME_SITE
+    # scene_option.flags[mujoco.mjtVisFlag.mjVIS_ACTIVATION] = True
+    # scene_option.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = True
 
     # Renderer dimensions - match with the offscreen buffer size
     width, height = 480, 480  # swapped to match the XML sizes
@@ -226,10 +231,20 @@ if __name__ == '__main__':
 
         target_vel, target_rotation_vel = 0.6, 1.
 
-        mjx_data = mjx_data.replace(qpos=jnp.array([-1, -1, -jnp.pi/2]), qvel=jnp.zeros(3))
+
+        rng = jax.random.PRNGKey(2)
+
+        OBSTACLE_JIGGLE = 0.3
+        obstacles_init = (jax.random.uniform(rng, (49-3,)) - 0.5) * OBSTACLE_JIGGLE
+        vehicle_init = jnp.array([-1, -1, -jnp.pi / 2])
+
+        qpos_init = jnp.concatenate([vehicle_init, obstacles_init])
+
+        mjx_data = mjx_data.replace(qpos=qpos_init, qvel=jnp.zeros(49))
 
         for i in trange(n_frames):
 
+            ## proportional guidance scheme
             vehicle_pos = mjx_data.sensordata[:3]
             goal_pos = mjx_data.sensordata[3:6]
             goal_vec_in_vehicle_frame = mjx_data.sensordata[6:9]
@@ -238,7 +253,7 @@ if __name__ == '__main__':
 
             goal_vec_normalized, distance = normalize_with_norm(goal_vec_in_vehicle_frame)
             ctrl_rotation_vel = - jnp.arcsin(goal_vec_normalized[0])
-            ctrl = jax.numpy.array([target_vel, ctrl_rotation_vel])
+            ctrl = jnp.array([target_vel, ctrl_rotation_vel])
             jax.debug.print('{}',ctrl)
             mjx_data = mjx_data.replace(ctrl=ctrl)
 
