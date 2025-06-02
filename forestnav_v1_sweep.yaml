@@ -17,7 +17,7 @@ parameters:
   entropy_cost:
     values: [1e-4, 1e-3, 1e-2]
   num_minibatches:
-    value: [128, 256, 512]
+    values: [128, 256, 512]
   batch_size:
     values: [8, 32, 128]
   normalize_observations:
