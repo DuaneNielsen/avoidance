@@ -156,6 +156,7 @@ def setup_parser():
 
 import numpy as np
 
+
 def rollout(env, policy, mp4_filename, seed=0, batch_size=4):
     wrapped_env = brax.envs.wrappers.training.wrap(env)
 
@@ -171,6 +172,12 @@ def rollout(env, policy, mp4_filename, seed=0, batch_size=4):
     rollout_batch = [state.pipeline_state]
     reward = jnp.zeros(batch_size)
 
+    # Collect data for ALL batch members
+    ctrl_seq = []  # Will be shape [timesteps, batch_size, action_dim]
+    xy_pos = []  # Will be shape [timesteps, batch_size, 2]
+    reward_seq = []  # Will be shape [timesteps, batch_size]
+    collision_seq = []  # Will be shape [timesteps, batch_size]
+
     # grab trajectories for all batch members
     for i in range(args.episode_length):
         rng_key, rng_ctrl = jax.random.split(rng_key)
@@ -178,10 +185,24 @@ def rollout(env, policy, mp4_filename, seed=0, batch_size=4):
         ctrl, info = vmap_policy(state.obs, rng_ctrl)
         state = jit_step(state, ctrl)
         reward += state.reward
+
+        # Store the entire batch state
         rollout_batch.append(state.pipeline_state)
+
+        # Log data from ALL trajectories
+        reward_seq.append(state.reward)  # [batch_size]
+        ctrl_seq.append(ctrl)  # [batch_size, action_dim]
+        xy_pos.append(state.pipeline_state.qpos[:, 0:2])  # [batch_size, 2]
+        collision_seq.append(state.pipeline_state.sensordata[:, COLLISION_SENSOR])  # [batch_size]
 
         if jnp.any(state.done):
             break
+
+    # Convert lists to arrays for easier plotting
+    ctrl_seq = jnp.stack(ctrl_seq)  # [timesteps, batch_size, action_dim]
+    xy_pos = jnp.stack(xy_pos)  # [timesteps, batch_size, 2]
+    reward_seq = jnp.stack(reward_seq)  # [timesteps, batch_size]
+    collision_seq = jnp.stack(collision_seq)  # [timesteps, batch_size]
 
     # Render all trajectories sequentially
     all_frames = []
@@ -200,6 +221,66 @@ def rollout(env, policy, mp4_filename, seed=0, batch_size=4):
         if batch_idx < batch_size - 1:
             black_frame = np.zeros_like(trajectory_frames[0])
             all_frames.extend([black_frame] * 10)  # 10 frames of black
+
+    def wandb_log_plot_batch(plt_name, data, ylabel="Value", labels=None):
+        """Plot data for all batch members on the same plot"""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        if labels is None:
+            labels = [f"Trajectory {i}" for i in range(batch_size)]
+
+        # If data has multiple dimensions (like ctrl with action_dim > 1), plot each dimension
+        if len(data.shape) == 3:  # [timesteps, batch_size, feature_dim]
+            for feature_idx in range(data.shape[2]):
+                for batch_idx in range(batch_size):
+                    ax.plot(data[:, batch_idx, feature_idx],
+                            label=f"{labels[batch_idx]} (dim {feature_idx})",
+                            alpha=0.7)
+        else:  # [timesteps, batch_size]
+            for batch_idx in range(batch_size):
+                ax.plot(data[:, batch_idx], label=labels[batch_idx], alpha=0.7)
+
+        ax.set_xlabel('Timestep')
+        ax.set_ylabel(ylabel)
+        ax.set_title(f'{plt_name} - All Trajectories')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        wandb.log({plt_name: fig})
+        plt.close(fig)  # Important to close to free memory
+
+    def wandb_log_xy_trajectory():
+        """Special plot for XY positions showing trajectory paths"""
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        for batch_idx in range(batch_size):
+            x_traj = xy_pos[:, batch_idx, 0]
+            y_traj = xy_pos[:, batch_idx, 1]
+
+            # Plot trajectory
+            ax.plot(x_traj, y_traj, label=f"Trajectory {batch_idx}", alpha=0.7, linewidth=2)
+
+            # Mark start and end points
+            ax.scatter(x_traj[0], y_traj[0], marker='o', s=100,
+                       label=f"Start {batch_idx}" if batch_idx == 0 else "", color='green')
+            ax.scatter(x_traj[-1], y_traj[-1], marker='x', s=100,
+                       label=f"End {batch_idx}" if batch_idx == 0 else "", color='red')
+
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position')
+        ax.set_title('Vehicle Trajectories in XY Space')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal')
+
+        wandb.log({"xy_trajectories": fig})
+        plt.close(fig)
+
+    # Create all the plots
+    wandb_log_plot_batch('ctrl_traj', ctrl_seq, ylabel="Control Signal")
+    wandb_log_plot_batch('reward', reward_seq, ylabel="Reward")
+    wandb_log_plot_batch('collision_sensor', collision_seq, ylabel="Collision Sensor")
+    wandb_log_xy_trajectory()
 
     media.write_video(mp4_filename, all_frames, fps=1.0 / env.dt)
     return reward
