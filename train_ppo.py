@@ -145,7 +145,7 @@ def setup_parser():
     # Parallelization settings
     parser.add_argument('--num_envs', type=int, default=512,
                         help='Number of parallel environments to run')
-    parser.add_argument('--batch_size', type=int, default=128,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for training')
 
     # Misc
@@ -345,7 +345,7 @@ if __name__ == '__main__':
     make_inference_fn, params, _ = train_fn(environment=env, progress_fn=progress)
 
     # save model
-    model_path = '/tmp/mjx_brax_policy'
+    model_path = f'{run.dir}/mjx_brax_policy.pt'
     model.save_params(model_path, params)
 
     print("rollout policy")
@@ -357,7 +357,7 @@ if __name__ == '__main__':
     eval_env = envs.get_environment(env_name, sensor_angle=sensor_angle, num_sensors=num_sensors, peturb_scale=args.peturb_scale)
 
     output_filename = "eval_ppo.mp4"
-    reward = rollout(eval_env, jit_inference_fn, output_filename)
+    reward = rollout(eval_env, jit_inference_fn, output_filename, batch_size=16)
     print(f'eval reward: {reward}')
 
     wandb.log({"eval_video": wandb.Video(output_filename, "eval_video")})
