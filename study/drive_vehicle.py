@@ -40,9 +40,9 @@ xml = """
     <velocity name="steer" joint="rotate_z" kv="5.0" ctrlrange="-3.0 3.0"/>
 
     <!-- Brake actuators - dampers that resist motion -->
-    <damper name="brake_x" joint="slide_x" kv="10.0" ctrlrange="0 1"/>
-    <damper name="brake_y" joint="slide_y" kv="10.0" ctrlrange="0 1"/>
-    <damper name="brake_rot" joint="rotate_z" kv="8.0" ctrlrange="0 1"/>
+    <damper name="brake_x" joint="slide_x" kv="40.0" ctrlrange="0 1"/>
+    <damper name="brake_y" joint="slide_y" kv="40.0" ctrlrange="0 1"/>
+    <damper name="brake_rot" joint="rotate_z" kv="32.0" ctrlrange="0 1"/>
   </actuator>
 </mujoco>
 """
