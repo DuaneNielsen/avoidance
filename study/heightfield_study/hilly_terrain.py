@@ -1,60 +1,110 @@
-import numpy as np
 import mujoco
 import mujoco.viewer
+import numpy as np
+import time
 
 xml = """
-<mujoco model="heightfield_hills">
+<mujoco model="vehicle_with_terrain">
+  <option timestep="0.01"/>
+
   <asset>
-    <hfield name="terrain" nrow="64" ncol="64" size="4 4 1.0 0.1"/>
-    <texture name="grid" type="2d" builtin="checker" 
-             width="512" height="512" rgb2="0.2 0.4 0.2" rgb1="0.8 1.0 0.8"/>
-    <material name="terrain_mat" texture="grid" texrepeat="8 8" 
+    <!-- Heightfield terrain -->
+    <hfield name="terrain" nrow="128" ncol="128" size="10 10 2.0 0.1"/>
+    <texture name="terrain_texture" type="2d" builtin="checker" 
+             width="512" height="512" rgb2="0.2 0.4 0.2" rgb1="0.6 0.8 0.6"/>
+    <material name="terrain_material" texture="terrain_texture" texrepeat="16 16" 
               texuniform="true" reflectance="0.3"/>
-    <material name="ball_mat" rgba="1 0 0 1"/>
+
+    <material name="vehicle_material" rgba="0.2 0.8 0.2 1"/>
   </asset>
 
   <worldbody>
     <light name="top" pos="0 0 8" dir="0 0 -1"/>
-    
-    <!-- Heightfield terrain -->
-    <geom name="heightfield" type="hfield" hfield="terrain" material="terrain_mat"/>
-    
-    <!-- Test ball to show terrain interaction -->
-    <body name="ball" pos="0 0 2">
-      <freejoint/>
-      <geom name="ball" type="sphere" size="0.1" material="ball_mat"/>
+
+    <!-- Heightfield terrain instead of flat plane -->
+    <geom name="terrain" type="hfield" hfield="terrain" material="terrain_material"
+          friction="0.8 0.1 0.1"/>
+
+    <body name="vehicle" pos="0 0 0.2">
+      <joint name="slide_x" type="slide" axis="1 0 0" damping="1.0"/>
+      <joint name="slide_y" type="slide" axis="0 1 0" damping="1.0"/>
+      <joint name="rotate_z" type="hinge" axis="0 0 1" damping="0.5"/>
+
+      <geom name="box" type="box" size="0.3 0.15 0.05" material="vehicle_material"
+            friction="0.8 0.1 0.1"/>
+
+      <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" 
+            quat="0.707 0 0 0.707"/>
+
+      <!-- Visual indicator for front -->
+      <geom name="front_indicator" type="sphere" size="0.03" pos="0.25 0 0" 
+            rgba="1 0 0 1"/>
     </body>
   </worldbody>
+
+  <actuator>
+    <!-- Drive actuators -->
+    <velocity name="drive" site="control_site" kv="8.0" gear="1 0 0 0 0 0" 
+              ctrlrange="-2.0 2.0"/>
+    <velocity name="steer" joint="rotate_z" kv="5.0" ctrlrange="-3.0 3.0"/>
+
+    <!-- Brake actuators - dampers that resist motion -->
+    <damper name="brake_x" joint="slide_x" kv="40.0" ctrlrange="0 1"/>
+    <damper name="brake_y" joint="slide_y" kv="40.0" ctrlrange="0 1"/>
+    <damper name="brake_rot" joint="rotate_z" kv="32.0" ctrlrange="0 1"/>
+  </actuator>
 </mujoco>
 """
 
-def generate_hill_terrain(nrow, ncol, hills_x=3, hills_y=3, hill_height=0.8, hill_radius=0.3):
+
+def generate_terrain_with_flat_center(nrow, ncol, hills_x=6, hills_y=6,
+                                      hill_height=0.6, hill_radius=0.25,
+                                      flat_radius=1.5):
     """
-    Generate heightfield data with a grid of circular hills.
+    Generate heightfield terrain with hills but flatten the center region for vehicle spawn.
 
     Args:
-        nrow, ncol: Heightfield dimensions
+        nrow, ncol: Heightfield grid dimensions
         hills_x, hills_y: Number of hills in each direction
         hill_height: Maximum height of hills (0-1 range)
         hill_radius: Radius of hills as fraction of spacing
+        flat_radius: Radius around center to flatten (in world units)
     """
     terrain = np.zeros((nrow, ncol))
+
+    # World size from XML: size="10 10 2.0 0.1" means 20x20 world units
+    world_size_x = 20.0  # Total world size
+    world_size_y = 20.0
 
     # Calculate hill positions
     spacing_x = nrow / (hills_x + 1)
     spacing_y = ncol / (hills_y + 1)
 
+    # Center of the grid
+    center_x = nrow / 2
+    center_y = ncol / 2
+
+    # Convert flat radius from world units to grid units
+    flat_radius_grid_x = flat_radius * nrow / world_size_x
+    flat_radius_grid_y = flat_radius * ncol / world_size_y
+
+    # Generate hills
     for i in range(hills_x):
         for j in range(hills_y):
             # Hill center positions
-            center_x = (i + 1) * spacing_x
-            center_y = (j + 1) * spacing_y
+            hill_center_x = (i + 1) * spacing_x
+            hill_center_y = (j + 1) * spacing_y
+
+            # Skip hills too close to center
+            dist_from_center = np.sqrt((hill_center_x - center_x) ** 2 + (hill_center_y - center_y) ** 2)
+            if dist_from_center < max(flat_radius_grid_x, flat_radius_grid_y) * 1.5:
+                continue
 
             # Create circular hill
             for x in range(nrow):
                 for y in range(ncol):
                     # Distance from hill center
-                    dist = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+                    dist = np.sqrt((x - hill_center_x) ** 2 + (y - hill_center_y) ** 2)
 
                     # Hill radius in grid units
                     radius = hill_radius * min(spacing_x, spacing_y)
@@ -64,41 +114,117 @@ def generate_hill_terrain(nrow, ncol, hills_x=3, hills_y=3, hill_height=0.8, hil
                         height = hill_height * (np.cos(np.pi * dist / radius) + 1) / 2
                         terrain[x, y] = max(terrain[x, y], height)
 
-    print(f"Generated {hills_x}x{hills_y} hills")
+    # Flatten the center region for vehicle spawn
+    for x in range(nrow):
+        for y in range(ncol):
+            # Distance from center
+            dist_x = abs(x - center_x)
+            dist_y = abs(y - center_y)
+
+            # If within flat radius, set to zero with smooth transition
+            if dist_x < flat_radius_grid_x and dist_y < flat_radius_grid_y:
+                terrain[x, y] = 0.0
+
+            # Smooth transition at the edge of flat zone
+            elif dist_x < flat_radius_grid_x * 1.2 and dist_y < flat_radius_grid_y * 1.2:
+                # Gradual transition
+                fade_factor = max(
+                    (dist_x - flat_radius_grid_x) / (flat_radius_grid_x * 0.2),
+                    (dist_y - flat_radius_grid_y) / (flat_radius_grid_y * 0.2)
+                )
+                fade_factor = np.clip(fade_factor, 0.0, 1.0)
+                terrain[x, y] *= fade_factor
+
+    print(f"Generated {hills_x}x{hills_y} hills with flat center")
     print(f"Terrain height range: {terrain.min():.3f} to {terrain.max():.3f}")
+    print(f"Flat radius: {flat_radius:.1f} world units")
     print(f"Hill spacing: {spacing_x:.1f} x {spacing_y:.1f} grid units")
 
     return terrain.flatten()
 
-def main():
-    # Create model
-    model = mujoco.MjModel.from_xml_string(xml)
-    data = mujoco.MjData(model)
 
-    # Generate terrain with 3x3 grid of hills
-    nrow, ncol = 64, 64
-    terrain_data = generate_hill_terrain(
-        nrow=nrow,
-        ncol=ncol,
-        hills_x=3,      # 3 hills in X direction
-        hills_y=3,      # 3 hills in Y direction
-        hill_height=0.8, # 80% of max height
-        hill_radius=0.4  # 40% of spacing
-    )
+# Create model
+model = mujoco.MjModel.from_xml_string(xml)
+data = mujoco.MjData(model)
 
-    # Set heightfield data
-    model.hfield_data[:] = terrain_data
+# Generate terrain with flattened center
+nrow, ncol = 128, 128
+terrain_data = generate_terrain_with_flat_center(
+    nrow=nrow,
+    ncol=ncol,
+    hills_x=6,  # 6 hills in X direction
+    hills_y=6,  # 6 hills in Y direction
+    hill_height=0.6,  # 60% of max height
+    hill_radius=0.25,  # 25% of spacing
+    flat_radius=1.5  # 1.5 world units flat around center
+)
 
-    # Launch 3D viewer
-    print("\nLaunching 3D viewer...")
-    print("- Ball will fall and roll on the terrain")
-    print("- Use mouse to navigate camera")
-    print("- Red ball shows physics interaction with hills")
+# Set heightfield data
+model.hfield_data[:] = terrain_data
 
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        while viewer.is_running():
-            mujoco.mj_step(model, data)
-            viewer.sync()
+timestep = 1 / 60.0
 
-if __name__ == "__main__":
-    main()
+# Control inputs
+forward_vel = 0.0
+rotate_vel = 0.0
+brake_force = 0.0
+
+
+def key_callback(keycode):
+    global forward_vel, rotate_vel, brake_force
+
+    if keycode == 32:  # Spacebar - BRAKE
+        forward_vel = 0.0
+        rotate_vel = 0.0
+        brake_force = 1.0  # Full brake
+        print("BRAKING")
+    elif keycode == 265:  # Up arrow - forward
+        forward_vel = 1.0
+        rotate_vel = 0.0
+        brake_force = 0.0
+        print("FORWARD")
+    elif keycode == 264:  # Down arrow - backward
+        forward_vel = -1.0
+        rotate_vel = 0.0
+        brake_force = 0.0
+        print("BACKWARD")
+    elif keycode == 263:  # Left arrow - rotate left
+        rotate_vel = 1.0
+        brake_force = 0.0
+        print("ROTATE LEFT")
+    elif keycode == 262:  # Right arrow - rotate right
+        rotate_vel = -1.0
+        brake_force = 0.0
+        print("ROTATE RIGHT")
+
+
+print("Vehicle with Hills Terrain and Flat Spawn Area")
+print("Controls:")
+print("  ↑ : Forward")
+print("  ↓ : Backward")
+print("  ← : Rotate Left")
+print("  → : Rotate Right")
+print("  SPACE : BRAKE (stops all movement)")
+print()
+print("The vehicle starts on flat ground and can drive up/down hills!")
+
+with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
+    while viewer.is_running():
+        start = time.time()
+
+        # Drive controls
+        data.ctrl[0] = forward_vel  # Drive
+        data.ctrl[1] = rotate_vel  # Steer
+
+        # Brake controls (dampers resist velocity)
+        data.ctrl[2] = brake_force  # X brake
+        data.ctrl[3] = brake_force  # Y brake
+        data.ctrl[4] = brake_force  # Rotation brake
+
+        mujoco.mj_step(model, data)
+        viewer.sync()
+
+        curr = time.time()
+        while curr - start < timestep:
+            time.sleep(0.001)
+            curr = time.time()
