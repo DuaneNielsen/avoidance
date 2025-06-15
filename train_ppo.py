@@ -23,19 +23,13 @@ import mujoco.mjx._src.math as mjxmath
 import argparse
 import brax.envs.wrappers.training
 import mediapy as media
+from forestnav_xml import uniform_like
 
 sensor_angle = 0.6
 num_sensors = 64
 
 COLLISION_SENSOR = 9
 RANGEFINDER_0 = 10
-
-# model, data = forestnav_xml.make_forest_v1(sensor_angle, num_sensors)
-#
-# rng = jax.random.PRNGKey(0)
-# rng = jax.random.split(rng, 4096)
-# init_data = jax.vmap(lambda rng: data)(rng)
-# step = jax.vmap(mjx.step, in_axes=(None, 0))
 
 
 def distance(vehicle_pos, goal_pos):
@@ -44,11 +38,11 @@ def distance(vehicle_pos, goal_pos):
 
 class ForestNav(PipelineEnv):
     def __init__(self, sensor_angle, num_sensors, peturb_scale, **kwargs):
-        obstacles_gen_f = partial(forestnav_xml.obstacles_grid_xml, [(-1., -1.), (0.5, 0.5)], 0.07)
-        xml = forestnav_xml.forestnav_xml(sensor_angle, num_sensors, obstacles_gen_f)
+        xml = forestnav_xml.make_xml(sensor_angle, num_sensors)
 
         self.peturb_scale = peturb_scale
         self.mj_model = mujoco.MjModel.from_xml_string(xml)
+        self.indexer = forestnav_xml.JointIndexer(self.mj_model)
         sys = mjcf.load_model(self.mj_model)
         self.MAX_DISTANCE = 2.83
         super().__init__(sys, **kwargs)
@@ -72,8 +66,8 @@ class ForestNav(PipelineEnv):
         return obs, dist
 
     def reset(self, rng: jnp.ndarray) -> State:
-        vehicle_init = jnp.array([-0.95, -0.95, -jnp.pi / 2])
-        obstacles_init = (jax.random.uniform(rng, (49-3,)) - 0.5) * self.peturb_scale
+        vehicle_init = jnp.array([0., 0., -jnp.pi / 2])
+        obstacles_init = (uniform_like(rng, self.indexer.obstacles) - 0.5) * self.peturb_scale
         qpos_init = jnp.concatenate([vehicle_init, obstacles_init])
         qvel = jnp.zeros_like(qpos_init)
         data = self.pipeline_init(qpos_init, qvel)
@@ -143,7 +137,7 @@ def setup_parser():
 
 
     # Parallelization settings
-    parser.add_argument('--num_envs', type=int, default=512,
+    parser.add_argument('--num_envs', type=int, default=128,
                         help='Number of parallel environments to run')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for training')
@@ -317,6 +311,7 @@ if __name__ == '__main__':
             return jnp.array([0.6, obs[0]]), None
 
         print("dev mode - testing environment")
+        wandb.run.tags = wandb.run.tags + ("dev",)
         reward = rollout(env, policy, 'dev_rollout_seed_0.mp4', seed=0)
         reward = rollout(env, policy, 'dev_rollout_seed_1.mp4', seed=1)
         print(f"dev reward: {reward}")
@@ -340,6 +335,7 @@ if __name__ == '__main__':
 
     def progress(num_steps, metrics):
         print(f"training {num_steps}: {metrics['eval/episode_reward']}")
+        print(metrics)
         wandb.log(metrics)
 
     make_inference_fn, params, _ = train_fn(environment=env, progress_fn=progress)
