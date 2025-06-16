@@ -5,11 +5,10 @@ import time
 
 
 """
-
 This is a simulation of a 2d vehicle with forward/reverse/brake and rotational steering
 The vehicle is located at the origin, and constrained using xy and hinge joints
 A heightmap is used for terrain, a grid of small hills, with a flat region around the origin
-A single ray is cast in the forward direction of the vehicle to detect terrain
+A fan of rays is cast in the forward direction of the vehicle to detect terrain
 """
 
 SENSOR_ANGLE_DEGREES = 64
