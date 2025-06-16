@@ -2,26 +2,44 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 import time
-from math import cos, sin
+
 
 """
+
 This is a simulation of a 2d vehicle with forward/reverse/brake and rotational steering
 The vehicle is located at the origin, and constrained using xy and hinge joints
 A heightmap is used for terrain, a grid of small hills, with a flat region around the origin
 A single ray is cast in the forward direction of the vehicle to detect terrain
 """
 
-SENSOR_ANGLE = 0.75
+SENSOR_ANGLE_DEGREES = 64
 NUM_SENSORS = 64
 
+def create_rotation_quat(axis, angle):
+    quat = np.zeros(4)
+    angle = np.radians(angle)
+    axis = np.array(axis)
+    mujoco.mju_axisAngle2Quat(quat, axis, angle)
+    return quat
 
+
+def mul_quat(lh_quat, rh_quat):
+    result = np.zeros(4)
+    mujoco.mju_mulQuat(result, lh_quat, rh_quat)
+    return result
+
+
+base_sensor_rotation = np.array([0.5, -0.5, 0.5, 0.5])
 
 sensor_site_xml = ""
 sensor_rangefinders_xml = ""
-rangefinder_angles = np.linspace(start=-SENSOR_ANGLE, stop=SENSOR_ANGLE, num=NUM_SENSORS)
+rangefinder_angles = np.linspace(start=-SENSOR_ANGLE_DEGREES, stop=SENSOR_ANGLE_DEGREES, num=NUM_SENSORS)
 for i, theta in enumerate(rangefinder_angles):
+    rf = np.zeros(4)
+    sensor_angle = create_rotation_quat([1, 0, 0], theta)
+    rf = mul_quat(base_sensor_rotation, sensor_angle)
     sensor_site_xml += f"""
-              <site name="site_rangefinder{i}" quat="{cos(theta / 2)} 0 {sin(theta / 2)} 0" size="0.01" rgba="1 0 0 1"/>
+              <site name="site_rangefinder{i}" quat="{rf[0]} {rf[1]} {rf[2]} {rf[3]}" size="0.01" rgba="1 0 0 1"/>
             """
     sensor_rangefinders_xml += f"""
         <rangefinder name="rangefinder{i}" site="site_rangefinder{i}"/>
@@ -60,7 +78,7 @@ xml = f"""
 
       <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" 
             quat="0.707 0 0 0.707"/>
-       <frame pos="0 0.01 0" quat="-1 1 0 0">
+       <frame pos="0 0.15 0">
       {sensor_site_xml}
         </frame>
     </body>
