@@ -24,6 +24,44 @@ def create_rotation_quat(axis, angle):
     mujoco.mju_axisAngle2Quat(quat, axis, angle)
     return quat
 
+def quaternion_axis_degrees(axis, theta_degrees):
+    """
+    Create a quaternion from rotation axis and angle in degrees using MuJoCo
+
+    Parameters:
+    axis: str - 'X', 'Y', or 'Z' (case insensitive)
+    theta_degrees: float - rotation angle in degrees
+
+    Returns:
+    numpy array [w, x, y, z] - quaternion from MuJoCo
+    """
+    axis = axis.upper()
+    if axis == 'X':
+        axis_vec = [1, 0, 0]
+    elif axis == 'Y':
+        axis_vec = [0, 1, 0]
+    elif axis == 'Z':
+        axis_vec = [0, 0, 1]
+    else:
+        raise ValueError("Axis must be 'X', 'Y', or 'Z'")
+
+    return create_rotation_quat(axis_vec, theta_degrees)
+
+
+def quaternion_to_string(q, precision=3):
+    """
+    Convert quaternion array to string format "w x y z"
+
+    Parameters:
+    q: numpy array [w, x, y, z] - quaternion
+    precision: int - number of decimal places (default: 3)
+
+    Returns:
+    str - formatted quaternion string
+    """
+    format_str = f"{{:.{precision}f}}"
+    return f"{format_str.format(q[0])} {format_str.format(q[1])} {format_str.format(q[2])} {format_str.format(q[3])}"
+
 
 def mul_quat(lh_quat, rh_quat):
     result = np.zeros(4)
@@ -31,135 +69,22 @@ def mul_quat(lh_quat, rh_quat):
     return result
 
 
-def create_rotation_quat(axis, angle):
-    quat = np.zeros(4)
-    angle = np.radians(angle)
-    axis = np.array(axis)
-    mujoco.mju_axisAngle2Quat(quat, axis, angle)
-    return quat
-
-
-def quaternion_multiply(q1, q2):
-    """Multiply two quaternions"""
-    result = np.zeros(4)
-    mujoco.mju_mulQuat(result, q1, q2)
-    return result
-
-
-# Basic rotation functions
-def rot_x(degrees):
-    """Rotate around X-axis"""
-    return create_rotation_quat([1, 0, 0], degrees)
-
-
-def rot_y(degrees):
-    """Rotate around Y-axis"""
-    return create_rotation_quat([0, 1, 0], degrees)
-
-
-def rot_z(degrees):
-    """Rotate around Z-axis"""
-    return create_rotation_quat([0, 0, 1], degrees)
-
-
-# Axis flipping functions
-def flip_x():
-    """Flip X-axis (180° rotation around Y-Z plane)"""
-    return create_rotation_quat([0, 1, 0], 180)
-
-
-def flip_y():
-    """Flip Y-axis (180° rotation around X-Z plane)"""
-    return create_rotation_quat([1, 0, 0], 180)
-
-
-def flip_z():
-    """Flip Z-axis (180° rotation around X-Y plane)"""
-    return create_rotation_quat([0, 0, 1], 180)
-
-
-# Composition function
-def compose(*quaternions):
-    """Compose multiple quaternions from left to right"""
-    result = quaternions[0]
-    for q in quaternions[1:]:
-        result = quaternion_multiply(result, q)
-    return result
-
-
-# Common named rotations
-def roll(degrees):
-    """Pitch rotation (around X-axis)"""
-    return rot_x(degrees)
-
-
-def yaw(degrees):
-    """Yaw rotation (around Z-axis)"""
-    return rot_z(degrees)
-
-
-def pitch(degrees):
-    """Roll rotation (around Y-axis)"""
-    return rot_y(degrees)
-
-
-# Axis alignment functions
-def align_x_to_y():
-    """Rotate so X-axis points in Y direction"""
-    return rot_z(90)
-
-
-def align_x_to_z():
-    """Rotate so X-axis points in Z direction"""
-    return rot_y(-90)
-
-
-def align_y_to_x():
-    """Rotate so Y-axis points in X direction"""
-    return rot_z(-90)
-
-
-def align_y_to_z():
-    """Rotate so Y-axis points in Z direction"""
-    return rot_x(90)
-
-
-def align_z_to_x():
-    """Rotate so Z-axis points in X direction"""
-    return rot_y(90)
-
-
-def align_z_to_y():
-    """Rotate so Z-axis points in Y direction"""
-    return rot_x(-90)
-
-
-# Utility for clean output
-def quat_string(q, precision=2):
-    """Format quaternion as clean string"""
-
-    def format_component(val):
-        if abs(val - round(val)) < 1e-10:
-            return str(int(round(val)))
-        else:
-            return f"{val:.{precision}f}".rstrip('0').rstrip('.')
-
-    return " ".join(format_component(comp) for comp in q)
-
-
+# Generate sensor sites and rangefinders
+base_sensor_rotation = np.array([0.000, 0.707, 0.000, 0.707])
 sensor_site_xml = ""
 sensor_rangefinders_xml = ""
 rangefinder_angles = np.linspace(start=-SENSOR_ANGLE_DEGREES, stop=SENSOR_ANGLE_DEGREES, num=NUM_SENSORS)
 
 for i, theta in enumerate(rangefinder_angles):
-    sensor_site_xml += \
-        f"""
-        <site name="site_rangefinder{i}" quat="{quat_string(roll(theta))}" size="0.01" rgba="1 0 0 1"/>
-        """
-    sensor_rangefinders_xml += \
-        f"""
+    rf = np.zeros(4)
+    sensor_angle = create_rotation_quat([1, 0, 0], theta)
+    rf = mul_quat(base_sensor_rotation, sensor_angle)
+    sensor_site_xml += f"""
+              <site name="site_rangefinder{i}" quat="{rf[0]} {rf[1]} {rf[2]} {rf[3]}" size="0.01" rgba="1 0 0 1"/>
+            """
+    sensor_rangefinders_xml += f"""
         <rangefinder name="rangefinder{i}" site="site_rangefinder{i}"/>
-        """
+    """
 
 xml = f"""
 <mujoco model="vehicle_with_terrain">
@@ -194,7 +119,7 @@ xml = f"""
 
       <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" />
 
-      <frame pos="0.3 0. 0" quat="{quat_string(pitch(90))}">
+      <frame pos="0.3 0. 0">
          {sensor_site_xml}
       </frame>
     </body>
@@ -219,7 +144,7 @@ xml = f"""
   <sensor>
     <framepos name="vehicle_pos" objtype="body" objname="vehicle"/>
     <framepos name="goal_pos" objtype="geom" objname="goal"/>
-    <framepos name="goalvec" objtype="geom" objname="goal" reftype="site" refname="control_site"/>
+    <framepos name="goalvec" objtype="geom" objname="goal" reftype="body" refname="vehicle"/>
     {sensor_rangefinders_xml}
   </sensor>
 
@@ -461,6 +386,7 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
         midpoint = (vehicle_pos + goal_pos) / 2
 
         midpoint = (vehicle_pos + goal_pos) / 2
+
 
         # Reset scene to original model geometry only
         viewer.user_scn.ngeom = model.ngeom

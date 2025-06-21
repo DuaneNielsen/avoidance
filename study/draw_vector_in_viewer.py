@@ -18,24 +18,25 @@ xml = """
       <!-- Visual marker for origin -->
       <geom name="origin" type="sphere" size="0.08" rgba="1 0 0 1"/>
 
-      <!-- Dynamic vectors as capsules - DISABLED FOR COLLISION -->
+      <!-- Dynamic vector as capsule - LOCAL FRAME (child of body) -->
       <geom name="vector1" type="capsule" size="0.03" 
             fromto="0 0 0 1 0.5 0.3" rgba="0 0 1 1"
             contype="0" conaffinity="0"/>
-      <geom name="vector2" type="capsule" size="0.03" 
-            fromto="0 0 0 0.5 -0.8 0.2" rgba="1 0 1 1"
-            contype="0" conaffinity="0"/>
     </body>
 
-    <!-- Fixed endpoint targets -->
+    <!-- Second vector defined in WORLD FRAME (child of worldbody) -->
+    <geom name="vector_world" type="capsule" size="0.025" 
+          fromto="0 0 0.2 1 0.5 0.5" rgba="1 0 1 1"
+          contype="0" conaffinity="0"/>
+
+    <!-- Fixed endpoint target -->
     <geom name="endpoint1" type="sphere" size="0.05" pos="2 1 0.5" rgba="0 1 0 1"/>
-    <geom name="endpoint2" type="sphere" size="0.05" pos="-1.5 -1 0.3" rgba="0 1 1 1"/>
+
+    <!-- Vehicle goal position marker -->
+    <geom name="goal_marker" type="sphere" size="0.06" pos="-1.5 -1.0 0.2" rgba="1 1 0 1"/>
 
     <!-- Ground plane for reference -->
     <geom name="ground" type="plane" size="5 5 0.1" rgba="0.3 0.3 0.3 0.5"/>
-
-    <!-- Test obstacle to verify no collision -->
-    <geom name="obstacle" type="box" size="0.3 0.3 0.2" pos="1 0 0.2" rgba="0.8 0.8 0.2 0.7"/>
   </worldbody>
 
   <actuator>
@@ -47,123 +48,238 @@ xml = """
 """
 
 
-def update_vector_geometry(model, data, geom_name, start_pos, end_pos):
-    """Update a capsule geometry to point from start_pos to end_pos."""
+def update_vector_geometry_local_frame(model, data, geom_name, end_pos, start_pos=None):
+    """
+    Update a capsule geometry in LOCAL FRAME (child of a body).
+
+    Args:
+        model: MuJoCo model
+        data: MuJoCo data
+        geom_name: Name of the capsule geometry
+        end_pos: Target endpoint in world coordinates
+        start_pos: Optional start position in world coordinates.
+                  If None, uses parent body's origin (recommended for local frame)
+
+    For local frame vectors, start_pos should typically be None to use the parent body's origin.
+    This creates vectors that extend FROM the body TO the target.
+    """
     geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
 
-    # Calculate vector
+    # If no start_pos specified, get the parent body's world position
+    if start_pos is None:
+        # Find the parent body of this geometry
+        parent_body_id = model.geom_bodyid[geom_id]
+        start_pos = data.xpos[parent_body_id].copy()
+
+    # Calculate vector in world coordinates
     vector = end_pos - start_pos
     length = np.linalg.norm(vector)
 
-    if length > 0:
-        # Midpoint of the capsule
-        midpoint = (start_pos + end_pos) / 2
+    if length > 1e-6:  # Avoid division by zero
+        # For local frame: capsule extends FROM origin TO target
+        # Midpoint in local coordinates = half the vector from origin
+        midpoint_local = vector / 2
 
         # Update geometry position (relative to parent body)
-        model.geom_pos[geom_id] = midpoint - start_pos
+        model.geom_pos[geom_id] = midpoint_local
 
         # Update geometry size (radius, half-length)
         model.geom_size[geom_id][1] = length / 2
 
-        # Calculate orientation quaternion
-        if length > 1e-6:
-            z_axis = np.array([0, 0, 1])
-            direction = vector / length
+        # Use MuJoCo's built-in function to create quaternion
+        direction = vector / length
+        quat = np.zeros(4)
+        mujoco.mju_quatZ2Vec(quat, direction)
 
-            if np.abs(np.dot(direction, z_axis)) > 0.99999:
-                if np.dot(direction, z_axis) > 0:
-                    quat = np.array([1, 0, 0, 0])
-                else:
-                    quat = np.array([0, 1, 0, 0])
-            else:
-                axis = np.cross(z_axis, direction)
-                axis = axis / np.linalg.norm(axis)
-                angle = np.arccos(np.clip(np.dot(z_axis, direction), -1, 1))
+        model.geom_quat[geom_id] = quat
 
-                quat = np.zeros(4)
-                quat[0] = np.cos(angle / 2)
-                quat[1:4] = np.sin(angle / 2) * axis
+        return midpoint_local, length, quat
 
-            model.geom_quat[geom_id] = quat
+    return None, 0, None
+
+# Simplified wrapper for the most common use case
+def update_local_vector_to_target(model, data, geom_name, target_pos):
+    """
+    Convenience function: Update local frame vector to point from body origin to target.
+    This is the most common use case for local frame vectors.
+    """
+    return update_vector_geometry_local_frame(model, data, geom_name, target_pos)
+
+
+def update_vector_geometry_world_frame(model, data, geom_name, start_pos, end_pos):
+    """
+    Update a capsule geometry in WORLD FRAME (child of worldbody).
+    Position is in absolute world coordinates.
+    """
+    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+
+    # Calculate vector in world coordinates
+    vector = end_pos - start_pos
+    length = np.linalg.norm(vector)
+
+    if length > 1e-6:  # Avoid division by zero
+        # For world frame, capsule center is at midpoint between start and end
+        midpoint_world = (start_pos + end_pos) / 2
+
+        # Update geometry position (absolute world coordinates)
+        model.geom_pos[geom_id] = midpoint_world
+
+        # Update geometry size (radius, half-length)
+        model.geom_size[geom_id][1] = length / 2
+
+        # Use MuJoCo's built-in function to create quaternion
+        direction = vector / length
+        quat = np.zeros(4)
+        mujoco.mju_quatZ2Vec(quat, direction)
+
+        model.geom_quat[geom_id] = quat
+
+        return midpoint_world, length, quat
+
+    return None, 0, None
+
+
+def update_vehicle_to_goal_vector(model, data, vector_geom_name, vehicle_pos, goal_pos):
+    """
+    Update a world-frame vector to show vehicle position to goal position.
+    This demonstrates how to use world-frame vectors for navigation visualization.
+    """
+    return update_vector_geometry_world_frame(model, data, vector_geom_name, vehicle_pos, goal_pos)
+
+
+def verify_capsule_geometry(model, data, geom_name, expected_start, expected_end):
+    """Verify that the capsule geometry matches expected start/end points."""
+    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+
+    # Get actual capsule properties
+    actual_pos = model.geom_pos[geom_id].copy()
+    actual_quat = model.geom_quat[geom_id].copy()
+    actual_half_length = model.geom_size[geom_id][1]
+
+    # Calculate what the endpoints should be based on capsule properties
+    # Capsule extends along Z-axis by default, so endpoints are at ±half_length in Z
+    local_start = np.array([0, 0, -actual_half_length])
+    local_end = np.array([0, 0, actual_half_length])
+
+    # Rotate local endpoints by capsule quaternion
+    rotated_start = np.zeros(3)
+    rotated_end = np.zeros(3)
+    mujoco.mju_rotVecQuat(rotated_start, local_start, actual_quat)
+    mujoco.mju_rotVecQuat(rotated_end, local_end, actual_quat)
+
+    # Add capsule center position to get world coordinates
+    calculated_start = actual_pos + rotated_start
+    calculated_end = actual_pos + rotated_end
+
+    return calculated_start, calculated_end
 
 
 def main():
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
 
-    # Fixed endpoint positions
+    # Fixed endpoint position for first vector
     endpoint1 = np.array([2.0, 1.0, 0.5])
-    endpoint2 = np.array([-1.5, -1.0, 0.3])
 
-    # Target position for position control
-    target_x = 0.0
-    target_y = 0.0
-    move_step = 1.0
+    # Goal position for vehicle navigation
+    goal_position = np.array([-1.5, -1.0, 0.2])
 
-    def key_callback(keycode):
-        nonlocal target_x, target_y
+    # Open loop control sequence
+    control_sequence = [
+        (0.0, 0.0, 2.0),  # Stay at origin for 2 seconds
+        (1.0, 0.0, 2.0),  # Move to x=1, y=0 for 2 seconds
+        (1.0, 0.5, 2.0),  # Move to x=1, y=0.5 for 2 seconds
+        (0.5, 0.5, 2.0),  # Move to x=0.5, y=0.5 for 2 seconds
+        (0.0, 0.0, 2.0),  # Return to origin for 2 seconds
+    ]
 
-        if keycode == 87 or keycode == 265:  # W or Up arrow
-            target_y = min(target_y + move_step, 3.0)
-            print(f"Target: ({target_x:.2f}, {target_y:.2f})")
-        elif keycode == 83 or keycode == 264:  # S or Down arrow
-            target_y = max(target_y - move_step, -3.0)
-            print(f"Target: ({target_x:.2f}, {target_y:.2f})")
-        elif keycode == 65 or keycode == 263:  # A or Left arrow
-            target_x = max(target_x - move_step, -3.0)
-            print(f"Target: ({target_x:.2f}, {target_y:.2f})")
-        elif keycode == 68 or keycode == 262:  # D or Right arrow
-            target_x = min(target_x + move_step, 3.0)
-            print(f"Target: ({target_x:.2f}, {target_y:.2f})")
-        elif keycode == 32:  # Spacebar - Return to center
-            target_x = 0.0
-            target_y = 0.0
-            print("Returning to center (0, 0)")
-        elif keycode == 67:  # C - Test collision area
-            target_x = 1.0
-            target_y = 0.0
-            print("Moving to obstacle area - testing collision!")
+    print("Dual Vector Visualization Test")
+    print("=" * 60)
+    print(f"Fixed endpoint (green sphere): {endpoint1}")
+    print(f"Goal position (yellow sphere): {goal_position}")
+    print("\nBlue vector: Local frame (vehicle->endpoint, moves with vehicle)")
+    print("Magenta vector: World frame (vehicle->goal, fixed in world)")
+    print("=" * 60)
 
-    print("Position Control with Collision-Free Vectors")
-    print("Controls:")
-    print("  W/↑ : Move Up")
-    print("  S/↓ : Move Down")
-    print("  A/← : Move Left")
-    print("  D/→ : Move Right")
-    print("  SPACE : Return to Center")
-    print("  C : Move to obstacle (test collision)")
-    print()
-    print("Vector capsules have contype=0 conaffinity=0 (no collision)")
-    print("Try moving through the yellow obstacle!")
+    current_step = 0
+    step_start_time = 0
+    total_time = 0
+    step_printed = False
 
-    with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
-        while viewer.is_running():
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        while viewer.is_running() and current_step < len(control_sequence):
+            # Get current control targets
+            target_x, target_y, duration = control_sequence[current_step]
+
             # Set position targets
             data.ctrl[0] = target_x
             data.ctrl[1] = target_y
 
             # Step simulation
             mujoco.mj_step(model, data)
+            total_time += model.opt.timestep
 
-            # Get current origin position
+            # Get current vehicle/origin position
             origin_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'origin_body')
-            origin_pos = data.xpos[origin_body_id].copy()
+            vehicle_pos = data.xpos[origin_body_id].copy()
 
-            # Update vector geometries
-            update_vector_geometry(model, data, 'vector1', origin_pos, endpoint1)
-            update_vector_geometry(model, data, 'vector2', origin_pos, endpoint2)
+            # Update both vectors
+            # 1. Local frame vector (blue): vehicle to fixed endpoint
+            update_local_vector_to_target(model, data, 'vector1', endpoint1)
 
-            # Debug: Check for contacts
-            if data.ncon > 0:
-                print(f"Active contacts: {data.ncon}")
-                for i in range(data.ncon):
-                    contact = data.contact[i]
-                    geom1_name = model.geom(contact.geom1).name or f"geom_{contact.geom1}"
-                    geom2_name = model.geom(contact.geom2).name or f"geom_{contact.geom2}"
-                    print(f"  Contact {i}: {geom1_name} - {geom2_name}")
+            # 2. World frame vector (magenta): vehicle to goal position
+            update_vehicle_to_goal_vector(model, data, 'vector_world', vehicle_pos, goal_position)
+
+            # Verify geometry once per step when settled
+            if not step_printed and (total_time - step_start_time) >= 1.5:
+                print(f"\nStep {current_step + 1}:")
+                print(f"Vehicle position: {vehicle_pos}")
+
+                # Verify local frame vector
+                print(f"\nLocal frame vector (blue):")
+                print(f"Expected: start={vehicle_pos} -> end={endpoint1}")
+                calc_start1, calc_end1 = verify_capsule_geometry(model, data, 'vector1', vehicle_pos, endpoint1)
+                print(f"Capsule:  start={calc_start1} -> end={calc_end1}")
+
+                # Verify world frame vector
+                print(f"\nWorld frame vector (magenta):")
+                print(f"Expected: start={vehicle_pos} -> end={goal_position}")
+                calc_start2, calc_end2 = verify_capsule_geometry(model, data, 'vector_world', vehicle_pos,
+                                                                 goal_position)
+                print(f"Capsule:  start={calc_start2} -> end={calc_end2}")
+
+                # Calculate errors
+                start_error1 = np.linalg.norm(calc_start1 - vehicle_pos)
+                end_error1 = np.linalg.norm(calc_end1 - endpoint1)
+                start_error2 = np.linalg.norm(calc_start2 - vehicle_pos)
+                end_error2 = np.linalg.norm(calc_end2 - goal_position)
+
+                print(f"\nErrors:")
+                print(f"Local vector:  start_error={start_error1:.6f}, end_error={end_error1:.6f}")
+                print(f"World vector:  start_error={start_error2:.6f}, end_error={end_error2:.6f}")
+
+                if all(error < 0.001 for error in [start_error1, end_error1, start_error2, end_error2]):
+                    print("✓ PASS - Both vectors match expected behavior")
+                else:
+                    print("✗ FAIL - One or more vectors don't match expected behavior")
+
+                step_printed = True
+
+            # Check if we should move to next step
+            if (total_time - step_start_time) >= duration:
+                current_step += 1
+                step_start_time = total_time
+                step_printed = False
 
             viewer.sync()
             time.sleep(0.01)
+
+    print("\nTest completed!")
+    print("\nKey differences observed:")
+    print("- Blue vector (local frame): Moves and rotates with the red vehicle body")
+    print("- Magenta vector (world frame): Start point follows vehicle, but stays fixed in world space")
+    print("- World frame vectors are ideal for navigation, pathfinding, and global reference lines")
+    print("- Local frame vectors are ideal for sensor visualization, robot arm links, vehicle-relative displays")
 
 
 if __name__ == "__main__":
