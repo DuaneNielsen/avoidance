@@ -15,19 +15,23 @@ Complete demo: 2D vehicle with heightfield terrain and ghost vector visualizatio
 SENSOR_ANGLE_DEGREES = 64
 NUM_SENSORS = 64
 GOAL_POS = "10. 0. 0.2"
-VEHICLE_START_POS = "0 0 0.2"
+
 
 VEHICLE_LENGTH = 0.3
 VEHICLE_WIDTH = 0.1
 VEHICLE_HEIGHT = 0.05
 VEHICLE_COLLISION = 0.1
-VEHICLE_SIZE = f"{VEHICLE_LENGTH} {VEHICLE_WIDTH} {VEHICLE_HEIGHT}"
+VEHICLE_CLEARANCE = 0.01
+VEHICLE_COLLISION_HEIGHT = - VEHICLE_HEIGHT + VEHICLE_CLEARANCE
+VEHICLE_SIZE = f"{VEHICLE_LENGTH} {VEHICLE_WIDTH} {VEHICLE_HEIGHT - VEHICLE_CLEARANCE}"
 
-VEHICLE_COLLISION_LEFT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {VEHICLE_WIDTH + VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
-VEHICLE_COLLISION_RIGHT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
+VEHICLE_START_POS = f"0 0 {VEHICLE_HEIGHT}"
 
-VEHICLE_COLLISION_FRONT  = f"{VEHICLE_LENGTH + VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
-VEHICLE_COLLISION_BACK  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
+VEHICLE_COLLISION_LEFT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {VEHICLE_WIDTH + VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
+VEHICLE_COLLISION_RIGHT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
+
+VEHICLE_COLLISION_FRONT  = f"{VEHICLE_LENGTH + VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
+VEHICLE_COLLISION_BACK  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
 
 
 
@@ -73,7 +77,7 @@ xml = f"""
       <joint name="slide_y" type="slide" axis="0 1 0" damping="1.0"/>
       <joint name="rotate_z" type="hinge" axis="0 0 1" damping="0.5"/>
 
-      <geom name="box" type="box" size="{VEHICLE_SIZE}" material="vehicle_material"
+      <geom name="vehicle_body" type="box" size="{VEHICLE_SIZE}" material="vehicle_material"
             friction="0.8 0.1 0.1"/>
 
       <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" />
@@ -82,16 +86,16 @@ xml = f"""
          {sensor_site_xml}         
       </frame>
       
-      <site name="sensor_fl" pos="{VEHICLE_COLLISION_LEFT_SIDE}" size="0.02" rgba="1 0 0 1" 
+      <site name="sensor_fl" pos="{VEHICLE_COLLISION_LEFT_SIDE}" size="0.01" rgba="1 0 0 1" 
             quat="{quat.quat_string(quat.pitch(90))}"/>
             
-      <site name="sensor_fr" pos="{VEHICLE_COLLISION_RIGHT_SIDE}" size="0.02" rgba="1 0 0 1" 
+      <site name="sensor_fr" pos="{VEHICLE_COLLISION_RIGHT_SIDE}" size="0.01" rgba="1 0 0 1" 
             quat="{quat.quat_string(quat.pitch(90))}"/>
 
-      <site name="sensor_rl" pos="{VEHICLE_COLLISION_FRONT}" size="0.02" rgba="0 0 1 1" 
+      <site name="sensor_rl" pos="{VEHICLE_COLLISION_FRONT}" size="0.01" rgba="0 0 1 1" 
             quat="{quat.quat_string(quat.compose(quat.pitch(90), quat.roll(-90)))}"/>
 
-      <site name="sensor_rr" pos="{VEHICLE_COLLISION_BACK}" size="0.02" rgba="0 0 1 1" 
+      <site name="sensor_rr" pos="{VEHICLE_COLLISION_BACK}" size="0.01" rgba="0 0 1 1" 
             quat="{quat.quat_string(quat.compose(quat.pitch(90), quat.roll(-90)))}"/>
     </body>
 
@@ -116,11 +120,12 @@ xml = f"""
     <framepos name="vehicle_pos" objtype="body" objname="vehicle"/>
     <framepos name="goal_pos" objtype="geom" objname="goal"/>
     <framepos name="goalvec" objtype="geom" objname="goal" reftype="site" refname="control_site"/>
+    
     <!-- Corner rangefinder sensors -->
-    <rangefinder name="range_fl" site="sensor_fl"/>
-    <rangefinder name="range_fr" site="sensor_fr"/>
-    <rangefinder name="range_rl" site="sensor_rl"/>
-    <rangefinder name="range_rr" site="sensor_rr"/>
+    <rangefinder name="range_fl" site="sensor_fl" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="range_fr" site="sensor_fr" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="range_rl" site="sensor_rl" cutoff="{(VEHICLE_WIDTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="range_rr" site="sensor_rr" cutoff="{(VEHICLE_WIDTH + VEHICLE_COLLISION) * 2}"/>
     {sensor_rangefinders_xml}
   </sensor>
 
@@ -193,6 +198,16 @@ def generate_terrain_with_flat_center(nrow, ncol, hills_x=6, hills_y=6,
 
     return terrain.flatten()
 
+
+def read_collision_sensors(data):
+    return np.abs(data.sensordata[9:11]), np.abs(data.sensordata[11:13])
+
+
+def collision_detected(data):
+    left_right, front_rear = read_collision_sensors(data)
+    side_collision = left_right < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
+    front_rear_collision = front_rear < (VEHICLE_WIDTH + VEHICLE_COLLISION) * 2
+    return np.any(side_collision | front_rear_collision)
 
 def add_vector_to_scene(scene, start_pos, end_pos, rgba=(1, 0, 0, 1), width=0.005):
     """Add a vector line directly to the scene graph (no physics collision)"""
@@ -355,6 +370,11 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
 
         goal_pos = site_local_to_world_simple(model, data, 'control_site', vector_to_goal_vehicle_frame)
         vehicle_pos = site_local_to_world_simple(model, data, 'control_site', np.zeros(3))
+        vehicle_collision = collision_detected(data)
+        vehicle_body_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "vehicle_body")
+        red, green = vehicle_collision, ~vehicle_collision
+        model.geom_rgba[vehicle_body_geom_id] = [red, green, 0., 1.0]
+
 
         # Calculate vector properties
         vector = goal_pos - vehicle_pos
