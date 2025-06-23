@@ -12,6 +12,7 @@ Complete demo: 2D vehicle with heightfield terrain and ghost vector visualizatio
 - Ghost vector visualization using scene graph (no physics interference)
 """
 
+
 SENSOR_ANGLE_DEGREES = 64
 NUM_SENSORS = 64
 GOAL_POS = "10. 0. 0.2"
@@ -22,24 +23,25 @@ VEHICLE_WIDTH = 0.1
 VEHICLE_HEIGHT = 0.05
 VEHICLE_COLLISION = 0.1
 VEHICLE_CLEARANCE = 0.01
+
+
 VEHICLE_COLLISION_HEIGHT = - VEHICLE_HEIGHT + VEHICLE_CLEARANCE
 VEHICLE_SIZE = f"{VEHICLE_LENGTH} {VEHICLE_WIDTH} {VEHICLE_HEIGHT - VEHICLE_CLEARANCE}"
-
 VEHICLE_START_POS = f"0 0 {VEHICLE_HEIGHT}"
+
+
+VEHICLE_COLLISION_LEFT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {VEHICLE_WIDTH + VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
+VEHICLE_COLLISION_RIGHT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
+VEHICLE_COLLISION_FRONT  = f"{VEHICLE_LENGTH + VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
+VEHICLE_COLLISION_BACK  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
 
 VEHICLE_COLLISION_LEFT_SENSOR_NAME = 'range_left'
 VEHICLE_COLLISION_RIGHT_SENSOR_NAME = 'range_right'
 VEHICLE_COLLISION_FRONT_SENSOR_NAME = 'range_front'
 VEHICLE_COLLISION_BACK_SENSOR_NAME = 'range_back'
-
-VEHICLE_COLLISION_LEFT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {VEHICLE_WIDTH + VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
-VEHICLE_COLLISION_RIGHT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
-
-VEHICLE_COLLISION_FRONT  = f"{VEHICLE_LENGTH + VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
-VEHICLE_COLLISION_BACK  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
-
-
 GOAL_SENSOR_NAME = 'goalvec'
+
+
 
 sensor_site_xml = ""
 sensor_rangefinders_xml = ""
@@ -310,190 +312,193 @@ def list_sensor_names(model):
     return sensor_names
 
 
-# Create model and data
-model = mujoco.MjModel.from_xml_string(xml)
-data = mujoco.MjData(model)
-
-sensor_names = list_sensor_names(model)
-print("All sensors:", sensor_names)
+if __name__ == '__main__':
 
 
-goal_vec_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, 'goal_vec')
+    # Create model and data
+    model = mujoco.MjModel.from_xml_string(xml)
+    data = mujoco.MjData(model)
+
+    sensor_names = list_sensor_names(model)
+    print("All sensors:", sensor_names)
 
 
-# Generate terrain with flattened center
-nrow, ncol = 128, 128
-terrain_data = generate_terrain_with_flat_center(
-    nrow=nrow,
-    ncol=ncol,
-    hills_x=6,
-    hills_y=6,
-    hill_height=0.6,
-    hill_radius=0.25,
-    flat_radius=1.5
-)
-
-# Set heightfield data
-model.hfield_data[:] = terrain_data
-
-timestep = 1 / 60.0
-
-# Control inputs
-forward_vel = 0.0
-rotate_vel = 0.0
-brake_force = 0.0
-auto_mode = False
-
-def key_callback(keycode):
-    global forward_vel, rotate_vel, brake_force, auto_mode
-
-    if keycode == 32:  # Spacebar - BRAKE
-        forward_vel = 0.0
-        rotate_vel = 0.0
-        brake_force = 1.0
-        print("BRAKING")
-    elif keycode == 265:  # Up arrow - forward
-        forward_vel = 1.0
-        rotate_vel = 0.0
-        brake_force = 0.0
-        print("FORWARD")
-    elif keycode == 264:  # Down arrow - backward
-        forward_vel = -1.0
-        rotate_vel = 0.0
-        brake_force = 0.0
-        print("BACKWARD")
-    elif keycode == 263:  # Left arrow - rotate left
-        rotate_vel = 1.0
-        brake_force = 0.0
-        print("ROTATE LEFT")
-    elif keycode == 262:  # Right arrow - rotate right
-        rotate_vel = -1.0
-        brake_force = 0.0
-        print("ROTATE RIGHT")
-    elif keycode == 344: # Right shift, toggle PID control
-        auto_mode = not auto_mode
-
-print("Vehicle with Ghost Vector Visualization Demo")
-print("=" * 50)
-print("Controls:")
-print("  ↑ : Forward")
-print("  ↓ : Backward")
-print("  ← : Rotate Left")
-print("  → : Rotate Right")
-print("  SPACE : BRAKE (stops all movement)")
-print()
-print("Features:")
-print("- Blue vector: Vehicle to goal (ghost object, no physics)")
-print("- Yellow marker: Vector midpoint")
-print("- Red rays: Rangefinder sensors")
-print("- Ghost objects don't interfere with sensors or physics!")
-print("=" * 50)
-
-from collections import deque
-rot_I = deque(maxlen=5)
-
-# Run simulation with ghost vector visualization
-with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
-    step_count = 0
-    last_sensor_print = 0
-
-    while viewer.is_running():
-        start = time.time()
-
-        # Set visualization flags
-        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = False
-        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
-
-        # Apply controls
-        data.ctrl[0] = forward_vel  # Drive
-        data.ctrl[1] = rotate_vel  # Steer
-        data.ctrl[2] = brake_force  # X brake
-        data.ctrl[3] = brake_force  # Y brake
-        data.ctrl[4] = brake_force  # Rotation brake
-
-        if auto_mode:
-            # dodgy control scheme
-            distance, angle = read_goal_sensor(model, data)
-            rot_P = 0.5 * angle
-            steer_angle = rot_P + sum(rot_I)
-            rot_I.appendleft(rot_P)
-            data.ctrl[1] = steer_angle[0]
-            data.ctrl[0] = np.maximum(0.3 * distance, 2.0)
-
-        # Step physics
-        mujoco.mj_step(model, data)
-
-        # Get vehicle and goal positions from sensors
-        # vehicle_pos = data.sensordata[0:3]
-        # goal_pos = data.sensordata[3:6]
-        vector_to_goal_vehicle_frame = data.sensordata[6:9]
-
-        goal_pos = site_local_to_world_simple(model, data, 'control_site', vector_to_goal_vehicle_frame)
-        vehicle_pos = site_local_to_world_simple(model, data, 'control_site', np.zeros(3))
-        vehicle_collision = collision_detected(model, data)
-        vehicle_body_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "vehicle_body")
-        red, green = vehicle_collision, ~vehicle_collision
-        model.geom_rgba[vehicle_body_geom_id] = [red[0], green[0], 0., 1.0]
+    goal_vec_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, 'goal_vec')
 
 
-        # Calculate vector properties
-        vector = goal_pos - vehicle_pos
-        distance = np.linalg.norm(vector)
-        midpoint = (vehicle_pos + goal_pos) / 2
+    # Generate terrain with flattened center
+    nrow, ncol = 128, 128
+    terrain_data = generate_terrain_with_flat_center(
+        nrow=nrow,
+        ncol=ncol,
+        hills_x=6,
+        hills_y=6,
+        hill_height=0.6,
+        hill_radius=0.25,
+        flat_radius=1.5
+    )
 
-        midpoint = (vehicle_pos + goal_pos) / 2
+    # Set heightfield data
+    model.hfield_data[:] = terrain_data
 
-        # Reset scene to original model geometry only
-        viewer.user_scn.ngeom = model.ngeom
+    timestep = 1 / 60.0
 
-        # Add ghost visualization (pure visual, no physics interference)
+    # Control inputs
+    forward_vel = 0.0
+    rotate_vel = 0.0
+    brake_force = 0.0
+    auto_mode = False
 
-        # 1. Main vector from vehicle to goal
-        add_vector_to_scene(
-            viewer.user_scn,
-            vehicle_pos,
-            goal_pos,
-            rgba=(0, 0, 1, 0.8),  # Blue, semi-transparent
-            width=0.02
-        )
+    def key_callback(keycode):
+        global forward_vel, rotate_vel, brake_force, auto_mode
 
-        # 2. Midpoint marker
-        add_marker_to_scene(
-            viewer.user_scn,
-            midpoint,
-            rgba=(1, 1, 0, 1),  # Yellow
-            size=0.08
-        )
+        if keycode == 32:  # Spacebar - BRAKE
+            forward_vel = 0.0
+            rotate_vel = 0.0
+            brake_force = 1.0
+            print("BRAKING")
+        elif keycode == 265:  # Up arrow - forward
+            forward_vel = 1.0
+            rotate_vel = 0.0
+            brake_force = 0.0
+            print("FORWARD")
+        elif keycode == 264:  # Down arrow - backward
+            forward_vel = -1.0
+            rotate_vel = 0.0
+            brake_force = 0.0
+            print("BACKWARD")
+        elif keycode == 263:  # Left arrow - rotate left
+            rotate_vel = 1.0
+            brake_force = 0.0
+            print("ROTATE LEFT")
+        elif keycode == 262:  # Right arrow - rotate right
+            rotate_vel = -1.0
+            brake_force = 0.0
+            print("ROTATE RIGHT")
+        elif keycode == 344: # Right shift, toggle PID control
+            auto_mode = not auto_mode
 
-        # 3. Additional visualization: distance indicators
-        if distance > 5.0:
-            # Add intermediate markers for long distances
-            quarter_point = vehicle_pos + vector * 0.25
-            three_quarter_point = vehicle_pos + vector * 0.75
+    print("Vehicle with Ghost Vector Visualization Demo")
+    print("=" * 50)
+    print("Controls:")
+    print("  ↑ : Forward")
+    print("  ↓ : Backward")
+    print("  ← : Rotate Left")
+    print("  → : Rotate Right")
+    print("  SPACE : BRAKE (stops all movement)")
+    print()
+    print("Features:")
+    print("- Blue vector: Vehicle to goal (ghost object, no physics)")
+    print("- Yellow marker: Vector midpoint")
+    print("- Red rays: Rangefinder sensors")
+    print("- Ghost objects don't interfere with sensors or physics!")
+    print("=" * 50)
 
-            add_marker_to_scene(viewer.user_scn, quarter_point,
-                                rgba=(0, 1, 1, 0.6), size=0.05)
-            add_marker_to_scene(viewer.user_scn, three_quarter_point,
-                                rgba=(1, 0, 1, 0.6), size=0.05)
+    from collections import deque
+    rot_I = deque(maxlen=5)
+
+    # Run simulation with ghost vector visualization
+    with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
+        step_count = 0
+        last_sensor_print = 0
+
+        while viewer.is_running():
+            start = time.time()
+
+            # Set visualization flags
+            viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = False
+            viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = True
+
+            # Apply controls
+            data.ctrl[0] = forward_vel  # Drive
+            data.ctrl[1] = rotate_vel  # Steer
+            data.ctrl[2] = brake_force  # X brake
+            data.ctrl[3] = brake_force  # Y brake
+            data.ctrl[4] = brake_force  # Rotation brake
+
+            if auto_mode:
+                # dodgy control scheme
+                distance, angle = read_goal_sensor(model, data)
+                rot_P = 0.5 * angle
+                steer_angle = rot_P + sum(rot_I)
+                rot_I.appendleft(rot_P)
+                data.ctrl[1] = steer_angle[0]
+                data.ctrl[0] = np.maximum(0.3 * distance, 2.0)
+
+            # Step physics
+            mujoco.mj_step(model, data)
+
+            # Get vehicle and goal positions from sensors
+            # vehicle_pos = data.sensordata[0:3]
+            # goal_pos = data.sensordata[3:6]
+            vector_to_goal_vehicle_frame = data.sensordata[6:9]
+
+            goal_pos = site_local_to_world_simple(model, data, 'control_site', vector_to_goal_vehicle_frame)
+            vehicle_pos = site_local_to_world_simple(model, data, 'control_site', np.zeros(3))
+            vehicle_collision = collision_detected(model, data)
+            vehicle_body_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "vehicle_body")
+            red, green = vehicle_collision, ~vehicle_collision
+            model.geom_rgba[vehicle_body_geom_id] = [red[0], green[0], 0., 1.0]
 
 
-        # Print status every 60 steps
-        if step_count - last_sensor_print >= 60:
-            print(f"Distance to goal: {distance:.2f}m | Vehicle pos: ({vehicle_pos[0]:.1f}, {vehicle_pos[1]:.1f}) | "
-                  f"Forward sensor: {data.sensordata[6]:.2f}m")
-            last_sensor_print = step_count
+            # Calculate vector properties
+            vector = goal_pos - vehicle_pos
+            distance = np.linalg.norm(vector)
+            midpoint = (vehicle_pos + goal_pos) / 2
 
-        step_count += 1
-        viewer.sync()
+            midpoint = (vehicle_pos + goal_pos) / 2
 
-        # Frame rate control
-        curr = time.time()
-        while curr - start < timestep:
-            time.sleep(0.001)
+            # Reset scene to original model geometry only
+            viewer.user_scn.ngeom = model.ngeom
+
+            # Add ghost visualization (pure visual, no physics interference)
+
+            # 1. Main vector from vehicle to goal
+            add_vector_to_scene(
+                viewer.user_scn,
+                vehicle_pos,
+                goal_pos,
+                rgba=(0, 0, 1, 0.8),  # Blue, semi-transparent
+                width=0.02
+            )
+
+            # 2. Midpoint marker
+            add_marker_to_scene(
+                viewer.user_scn,
+                midpoint,
+                rgba=(1, 1, 0, 1),  # Yellow
+                size=0.08
+            )
+
+            # 3. Additional visualization: distance indicators
+            if distance > 5.0:
+                # Add intermediate markers for long distances
+                quarter_point = vehicle_pos + vector * 0.25
+                three_quarter_point = vehicle_pos + vector * 0.75
+
+                add_marker_to_scene(viewer.user_scn, quarter_point,
+                                    rgba=(0, 1, 1, 0.6), size=0.05)
+                add_marker_to_scene(viewer.user_scn, three_quarter_point,
+                                    rgba=(1, 0, 1, 0.6), size=0.05)
+
+
+            # Print status every 60 steps
+            if step_count - last_sensor_print >= 60:
+                print(f"Distance to goal: {distance:.2f}m | Vehicle pos: ({vehicle_pos[0]:.1f}, {vehicle_pos[1]:.1f}) | "
+                      f"Forward sensor: {data.sensordata[6]:.2f}m")
+                last_sensor_print = step_count
+
+            step_count += 1
+            viewer.sync()
+
+            # Frame rate control
             curr = time.time()
+            while curr - start < timestep:
+                time.sleep(0.001)
+                curr = time.time()
 
-print("\nDemo completed!")
-print("Key takeaways:")
-print("- Ghost vectors don't block rangefinder rays")
-print("- Scene graph visualization has zero physics overhead")
-print("- Perfect for dynamic navigation displays")
+    print("\nDemo completed!")
+    print("Key takeaways:")
+    print("- Ghost vectors don't block rangefinder rays")
+    print("- Scene graph visualization has zero physics overhead")
+    print("- Perfect for dynamic navigation displays")
