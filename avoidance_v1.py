@@ -17,6 +17,17 @@ NUM_SENSORS = 64
 GOAL_POS = "10. 0. 0.2"
 VEHICLE_START_POS = "0 0 0.2"
 
+VEHICLE_LENGTH = 0.3
+VEHICLE_WIDTH = 0.1
+VEHICLE_HEIGHT = 0.05
+VEHICLE_COLLISION = 0.1
+VEHICLE_SIZE = f"{VEHICLE_LENGTH} {VEHICLE_WIDTH} {VEHICLE_HEIGHT}"
+
+VEHICLE_COLLISION_LEFT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {VEHICLE_WIDTH + VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
+VEHICLE_COLLISION_RIGHT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
+
+VEHICLE_COLLISION_FRONT  = f"{VEHICLE_LENGTH + VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
+VEHICLE_COLLISION_BACK  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_HEIGHT}"
 
 
 
@@ -62,7 +73,7 @@ xml = f"""
       <joint name="slide_y" type="slide" axis="0 1 0" damping="1.0"/>
       <joint name="rotate_z" type="hinge" axis="0 0 1" damping="0.5"/>
 
-      <geom name="box" type="box" size="0.3 0.15 0.05" material="vehicle_material"
+      <geom name="box" type="box" size="{VEHICLE_SIZE}" material="vehicle_material"
             friction="0.8 0.1 0.1"/>
 
       <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" />
@@ -71,19 +82,16 @@ xml = f"""
          {sensor_site_xml}         
       </frame>
       
-      <site name="sensor_fl" pos="-0.4 0.25 0" size="0.02" rgba="1 0 0 1" 
+      <site name="sensor_fl" pos="{VEHICLE_COLLISION_LEFT_SIDE}" size="0.02" rgba="1 0 0 1" 
+            quat="{quat.quat_string(quat.pitch(90))}"/>
+            
+      <site name="sensor_fr" pos="{VEHICLE_COLLISION_RIGHT_SIDE}" size="0.02" rgba="1 0 0 1" 
             quat="{quat.quat_string(quat.pitch(90))}"/>
 
-      <!-- Front-right corner sensor (fires forward) -->
-      <site name="sensor_fr" pos="-0.4 -0.25 0" size="0.02" rgba="1 0 0 1" 
-            quat="{quat.quat_string(quat.pitch(90))}"/>
-
-      <!-- Rear-left corner sensor (fires backward) -->
-      <site name="sensor_rl" pos="0.4 -0.25 0" size="0.02" rgba="0 0 1 1" 
+      <site name="sensor_rl" pos="{VEHICLE_COLLISION_FRONT}" size="0.02" rgba="0 0 1 1" 
             quat="{quat.quat_string(quat.compose(quat.pitch(90), quat.roll(-90)))}"/>
 
-      <!-- Rear-right corner sensor (fires backward) -->
-      <site name="sensor_rr" pos="-0.4 -0.25 0" size="0.02" rgba="0 0 1 1" 
+      <site name="sensor_rr" pos="{VEHICLE_COLLISION_BACK}" size="0.02" rgba="0 0 1 1" 
             quat="{quat.quat_string(quat.compose(quat.pitch(90), quat.roll(-90)))}"/>
     </body>
 
