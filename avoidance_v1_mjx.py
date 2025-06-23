@@ -40,10 +40,18 @@ class AvoidanceMJX(PipelineEnv):
         sys = mjcf.load_model(self.mj_model_cpu)
         super().__init__(sys, **kwargs)
 
+    def list_sensor_names(self):
+        """Get a list of all sensor names"""
+        sensor_names = []
+        for i in range(self.mj_model_cpu.nsensor):
+            name = mujoco.mj_id2name(self.mj_model_cpu, mujoco.mjtObj.mjOBJ_SENSOR, i)
+            sensor_names.append(name)
+        return sensor_names
+
     def _obs(self, data):
         distance_to_goal, angle_to_goal = read_goal_sensor(self.mj_model_cpu, data)
         RANGEFINDER_0 = mujoco.mj_name2id(self.mj_model_cpu, mujoco.mjtObj.mjOBJ_SENSOR, avoidance.RANGEFINDER_SENSOR_PREFIX + '0')
-        rangefinder = data.sensors[RANGEFINDER_0:]
+        rangefinder = data.sensordata[RANGEFINDER_0:]
         rangefinder_norm = jnp.where(rangefinder == -1., avoidance.RANGEFINDER_CUTOFF, rangefinder) / avoidance.RANGEFINDER_CUTOFF
         obs = jnp.concat([angle_to_goal.reshape(1), distance_to_goal.reshape(1)/avoidance.RANGEFINDER_CUTOFF, rangefinder_norm])
         return obs, distance_to_goal
@@ -86,4 +94,19 @@ class AvoidanceMJX(PipelineEnv):
 envs.register_environment('avoidance_v1', AvoidanceMJX)
 
 if __name__ == '__main__':
-    pass
+
+    import brax.envs.wrappers.training
+    import jax
+
+    seed = 0
+    batch_size = 2
+
+    env = envs.get_environment('avoidance_v1')
+    print(env.list_sensor_names())
+    wrapped_env = brax.envs.wrappers.training.wrap(env)
+    jit_reset = jax.jit(wrapped_env.reset)
+    jit_step = jax.jit(wrapped_env.step)
+
+    rng_key, rng_init = jax.random.split(jax.random.PRNGKey(seed), 2)
+    state = jit_reset(jax.random.split(rng_init, batch_size))
+

@@ -128,7 +128,7 @@ xml = f"""
   <sensor>
     <framepos name="vehicle_pos" objtype="body" objname="vehicle"/>
     <framepos name="goal_pos" objtype="geom" objname="goal"/>
-    <framepos name="f{GOAL_SENSOR_NAME}" objtype="geom" objname="goal" reftype="site" refname="control_site"/>
+    <framepos name="{GOAL_SENSOR_NAME}" objtype="geom" objname="goal" reftype="site" refname="control_site"/>
     
     <!-- Corner rangefinder sensors -->
     <rangefinder name="{VEHICLE_COLLISION_LEFT_SENSOR_NAME}" site="sensor_fl" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
