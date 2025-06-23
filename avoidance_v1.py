@@ -76,12 +76,16 @@ xml = f"""
 
   <worldbody>
     <light name="top" pos="0 0 8" dir="0 0 -1"/>
+    <camera name='perspective' pos="-7.028 -5.392 6.348" xyaxes="0.609 -0.793 0.000 0.462 0.355 0.813"/>
+    
 
     <!-- Heightfield terrain -->
     <geom name="terrain" type="hfield" hfield="terrain" material="terrain_material"
           friction="0.8 0.1 0.1"/>
 
     <body name="vehicle" pos="{VEHICLE_START_POS}">
+      <camera name="track_vehicle" pos="0 0 10" mode="track"/>
+      <camera name="first_person" pos="-1 0 0.3" xyaxes="0 -1 0 0 0.3 1"/>
       <joint name="slide_x" type="slide" axis="1 0 0" damping="1.0"/>
       <joint name="slide_y" type="slide" axis="0 1 0" damping="1.0"/>
       <joint name="rotate_z" type="hinge" axis="0 0 1" damping="0.5"/>
@@ -235,12 +239,10 @@ def read_goal_sensor(model, data):
 
 def collision_detected(model, data):
     left, right, front, rear = read_collision_sensors(model, data)
-    print(left, right, front, rear)
     left_collision = left < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
     right_collision = right < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
     front_collision = front < (VEHICLE_WIDTH + VEHICLE_COLLISION) * 2
     rear_collision = rear < (VEHICLE_WIDTH + VEHICLE_COLLISION) * 2
-    print(left_collision, right_collision, front_collision, rear_collision)
     return left_collision | right_collision | front_collision | rear_collision
 
 def add_vector_to_scene(scene, start_pos, end_pos, rgba=(1, 0, 0, 1), width=0.005):
@@ -464,23 +466,12 @@ if __name__ == '__main__':
             )
 
             # 2. Midpoint marker
-            add_marker_to_scene(
-                viewer.user_scn,
-                midpoint,
-                rgba=(1, 1, 0, 1),  # Yellow
-                size=0.08
-            )
-
-            # 3. Additional visualization: distance indicators
-            if distance > 5.0:
-                # Add intermediate markers for long distances
-                quarter_point = vehicle_pos + vector * 0.25
-                three_quarter_point = vehicle_pos + vector * 0.75
-
-                add_marker_to_scene(viewer.user_scn, quarter_point,
-                                    rgba=(0, 1, 1, 0.6), size=0.05)
-                add_marker_to_scene(viewer.user_scn, three_quarter_point,
-                                    rgba=(1, 0, 1, 0.6), size=0.05)
+            # add_marker_to_scene(
+            #     viewer.user_scn,
+            #     midpoint,
+            #     rgba=(1, 1, 0, 1),  # Yellow
+            #     size=0.08
+            # )
 
 
             # Print status every 60 steps
