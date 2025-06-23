@@ -27,6 +27,11 @@ VEHICLE_SIZE = f"{VEHICLE_LENGTH} {VEHICLE_WIDTH} {VEHICLE_HEIGHT - VEHICLE_CLEA
 
 VEHICLE_START_POS = f"0 0 {VEHICLE_HEIGHT}"
 
+VEHICLE_COLLISION_LEFT_SENSOR_NAME = 'range_left'
+VEHICLE_COLLISION_RIGHT_SENSOR_NAME = 'range_right'
+VEHICLE_COLLISION_FRONT_SENSOR_NAME = 'range_front'
+VEHICLE_COLLISION_BACK_SENSOR_NAME = 'range_back'
+
 VEHICLE_COLLISION_LEFT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {VEHICLE_WIDTH + VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
 VEHICLE_COLLISION_RIGHT_SIDE  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
 
@@ -34,6 +39,7 @@ VEHICLE_COLLISION_FRONT  = f"{VEHICLE_LENGTH + VEHICLE_COLLISION} {-VEHICLE_WIDT
 VEHICLE_COLLISION_BACK  = f"{- VEHICLE_LENGTH - VEHICLE_COLLISION} {-VEHICLE_WIDTH - VEHICLE_COLLISION} {VEHICLE_COLLISION_HEIGHT}"
 
 
+GOAL_SENSOR_NAME = 'goalvec'
 
 sensor_site_xml = ""
 sensor_rangefinders_xml = ""
@@ -119,13 +125,13 @@ xml = f"""
   <sensor>
     <framepos name="vehicle_pos" objtype="body" objname="vehicle"/>
     <framepos name="goal_pos" objtype="geom" objname="goal"/>
-    <framepos name="goalvec" objtype="geom" objname="goal" reftype="site" refname="control_site"/>
+    <framepos name="f{GOAL_SENSOR_NAME}" objtype="geom" objname="goal" reftype="site" refname="control_site"/>
     
     <!-- Corner rangefinder sensors -->
-    <rangefinder name="range_fl" site="sensor_fl" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
-    <rangefinder name="range_fr" site="sensor_fr" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
-    <rangefinder name="range_rl" site="sensor_rl" cutoff="{(VEHICLE_WIDTH + VEHICLE_COLLISION) * 2}"/>
-    <rangefinder name="range_rr" site="sensor_rr" cutoff="{(VEHICLE_WIDTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="{VEHICLE_COLLISION_LEFT_SENSOR_NAME}" site="sensor_fl" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="{VEHICLE_COLLISION_RIGHT_SENSOR_NAME}" site="sensor_fr" cutoff="{(VEHICLE_LENGTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="{VEHICLE_COLLISION_FRONT_SENSOR_NAME}" site="sensor_rl" cutoff="{(VEHICLE_WIDTH + VEHICLE_COLLISION) * 2}"/>
+    <rangefinder name="{VEHICLE_COLLISION_BACK_SENSOR_NAME}" site="sensor_rr" cutoff="{(VEHICLE_WIDTH + VEHICLE_COLLISION) * 2}"/>
     {sensor_rangefinders_xml}
   </sensor>
 
@@ -199,23 +205,40 @@ def generate_terrain_with_flat_center(nrow, ncol, hills_x=6, hills_y=6,
     return terrain.flatten()
 
 
-def read_collision_sensors(data):
-    return np.abs(data.sensordata[9:11]), np.abs(data.sensordata[11:13])
+def get_sensor_data_range(model, data, sensor_name):
+    """Get the full data range for a multi-dimensional sensor"""
+    sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_name)
+    assert sensor_id != -1, f"sensor {sensor_name} not found"
+    start_idx = model.sensor_adr[sensor_id]  # Use sensor_adr, not sum of dims!
+    end_idx = start_idx + model.sensor_dim[sensor_id]
+    return data.sensordata[start_idx:end_idx]
 
 
-def read_goal_sensor(data):
-    goal_xy_in_vehicle_frame = data.sensordata[6:8]
+def read_collision_sensors(model, data):
+    left = get_sensor_data_range(model, data, VEHICLE_COLLISION_LEFT_SENSOR_NAME)
+    right = get_sensor_data_range(model, data, VEHICLE_COLLISION_RIGHT_SENSOR_NAME)
+    front = get_sensor_data_range(model, data, VEHICLE_COLLISION_FRONT_SENSOR_NAME)
+    back = get_sensor_data_range(model, data, VEHICLE_COLLISION_BACK_SENSOR_NAME)
+    return np.abs(left), np.abs(right), np.abs(front), np.abs(back)
+
+
+def read_goal_sensor(model, data):
+    goal_xyz_in_vehicle_frame = get_sensor_data_range(model, data, GOAL_SENSOR_NAME)
+    goal_xy_in_vehicle_frame = goal_xyz_in_vehicle_frame[0:2]
     distance = np.linalg.norm(goal_xy_in_vehicle_frame)
     normalized_goal_xy_in_vehicle_frame = goal_xy_in_vehicle_frame / distance
     angle = np.arctan(normalized_goal_xy_in_vehicle_frame[1:2], normalized_goal_xy_in_vehicle_frame[0:1])
     return distance, angle
 
-
-def collision_detected(data):
-    left_right, front_rear = read_collision_sensors(data)
-    side_collision = left_right < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
-    front_rear_collision = front_rear < (VEHICLE_WIDTH + VEHICLE_COLLISION) * 2
-    return np.any(side_collision | front_rear_collision)
+def collision_detected(model, data):
+    left, right, front, rear = read_collision_sensors(model, data)
+    print(left, right, front, rear)
+    left_collision = left < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
+    right_collision = right < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
+    front_collision = front < (VEHICLE_WIDTH + VEHICLE_COLLISION) * 2
+    rear_collision = rear < (VEHICLE_WIDTH + VEHICLE_COLLISION) * 2
+    print(left_collision, right_collision, front_collision, rear_collision)
+    return left_collision | right_collision | front_collision | rear_collision
 
 def add_vector_to_scene(scene, start_pos, end_pos, rgba=(1, 0, 0, 1), width=0.005):
     """Add a vector line directly to the scene graph (no physics collision)"""
@@ -277,10 +300,23 @@ def site_local_to_world_simple(model, data, site_name, local_coords):
 
     return world_pos
 
+# Method 1: Simple list of all sensor names
+def list_sensor_names(model):
+    """Get a list of all sensor names"""
+    sensor_names = []
+    for i in range(model.nsensor):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SENSOR, i)
+        sensor_names.append(name)
+    return sensor_names
+
 
 # Create model and data
 model = mujoco.MjModel.from_xml_string(xml)
 data = mujoco.MjData(model)
+
+sensor_names = list_sensor_names(model)
+print("All sensors:", sensor_names)
+
 
 goal_vec_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, 'goal_vec')
 
@@ -377,7 +413,7 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
 
         if auto_mode:
             # dodgy control scheme
-            distance, angle = read_goal_sensor(data)
+            distance, angle = read_goal_sensor(model, data)
             rot_P = 0.5 * angle
             steer_angle = rot_P + sum(rot_I)
             rot_I.appendleft(rot_P)
@@ -391,14 +427,13 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
         # vehicle_pos = data.sensordata[0:3]
         # goal_pos = data.sensordata[3:6]
         vector_to_goal_vehicle_frame = data.sensordata[6:9]
-        print(vector_to_goal_vehicle_frame)
 
         goal_pos = site_local_to_world_simple(model, data, 'control_site', vector_to_goal_vehicle_frame)
         vehicle_pos = site_local_to_world_simple(model, data, 'control_site', np.zeros(3))
-        vehicle_collision = collision_detected(data)
+        vehicle_collision = collision_detected(model, data)
         vehicle_body_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "vehicle_body")
         red, green = vehicle_collision, ~vehicle_collision
-        model.geom_rgba[vehicle_body_geom_id] = [red, green, 0., 1.0]
+        model.geom_rgba[vehicle_body_geom_id] = [red[0], green[0], 0., 1.0]
 
 
         # Calculate vector properties
