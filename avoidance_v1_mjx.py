@@ -32,7 +32,7 @@ def collision_detected(model, data):
     right_collision = right < (avoidance.VEHICLE_LENGTH + avoidance.VEHICLE_COLLISION) * 2
     front_collision = front < (avoidance.VEHICLE_WIDTH + avoidance.VEHICLE_COLLISION) * 2
     rear_collision = rear < (avoidance.VEHICLE_WIDTH + avoidance.VEHICLE_COLLISION) * 2
-    return left_collision | right_collision | front_collision | rear_collision
+    return jnp.any(left_collision | right_collision | front_collision | rear_collision)
 
 
 class AvoidanceMJX(PipelineEnv):
@@ -80,14 +80,8 @@ class AvoidanceMJX(PipelineEnv):
         reward = 10. - distance
 
         # if we collide with terrain we are done
-        collision_sensor = collision_detected(self.mj_model_cpu, data)
-        done = jnp.squeeze(jnp.where(collision_sensor > 0., 1., 0.), -1)
-
-        jax.debug.print('done {}', done)
-        jax.debug.print('done.shape {}', done.shape)
-        jax.debug.print('collision_sensor {}', collision_sensor)
-        jax.debug.print('collision_sensor.shape {}', collision_sensor.shape)
-        jax.debug.print('state.done.shape {}', state.done.shape)
+        collision = collision_detected(self.mj_model_cpu, data)
+        done = jnp.where(collision > 0., 1., 0.)
 
         state.metrics.update(
             reward=reward,
