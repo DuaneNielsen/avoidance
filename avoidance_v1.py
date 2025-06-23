@@ -40,8 +40,9 @@ VEHICLE_COLLISION_RIGHT_SENSOR_NAME = 'range_right'
 VEHICLE_COLLISION_FRONT_SENSOR_NAME = 'range_front'
 VEHICLE_COLLISION_BACK_SENSOR_NAME = 'range_back'
 GOAL_SENSOR_NAME = 'goalvec'
-
-
+RANGEFINDER_SENSOR_PREFIX = 'rangefinder'
+RANGEFINDER_SITE_PREFIX = 'site_rangefinder'
+RANGEFINDER_CUTOFF = 4.83
 
 sensor_site_xml = ""
 sensor_rangefinders_xml = ""
@@ -50,11 +51,11 @@ rangefinder_angles = np.linspace(start=-SENSOR_ANGLE_DEGREES, stop=SENSOR_ANGLE_
 for i, theta in enumerate(rangefinder_angles):
     sensor_site_xml += \
         f"""
-        <site name="site_rangefinder{i}" quat="{quat.quat_string(quat.roll(theta))}" size="0.01" rgba="1 0 0 1"/>
+        <site name="{RANGEFINDER_SITE_PREFIX}{i}" quat="{quat.quat_string(quat.roll(theta))}" size="0.01" rgba="1 0 0 1"/>
         """
     sensor_rangefinders_xml += \
         f"""
-        <rangefinder name="rangefinder{i}" site="site_rangefinder{i}"/>
+        <rangefinder name="{RANGEFINDER_SENSOR_PREFIX}{i}" site="site_rangefinder{i}" cutoff="{RANGEFINDER_CUTOFF}"/>
         """
 
 xml = f"""
