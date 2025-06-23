@@ -8,6 +8,10 @@ import mujoco.mjx._src.math as mjxmath
 import avoidance_v1 as avoidance
 from avoidance_v1 import get_sensor_data_range
 from brax.envs.wrappers.training import Wrapper
+import jax
+import mediapy
+import brax.envs.wrappers.training
+import numpy as np
 
 
 def read_goal_sensor(model_cpu, data):
@@ -135,65 +139,175 @@ class ForwardTurnBrake(Wrapper):
     def render(self, *args, **kwargs):
         return self.env.render(*args, **kwargs)
 
-if __name__ == '__main__':
 
-    import brax.envs.wrappers.training
-    import jax
+def default_manual_policy(obs, rng, step_counter):
+    """
+    Default manual policy for testing
 
-    seed = 0
-    batch_size = 2
+    Args:
+        obs: Observation (not used in this simple policy)
+        rng: Random key (not used)
+        step_counter: Current step number for phased control
 
-    env = envs.get_environment('avoidance_v1')
+    Returns:
+        action: [drive, steer, brake]
+    """
+    episode_length = 300  # Should match the episode_length in rollout
+
+    if step_counter < episode_length // 4:
+        # Phase 1: Go forward
+        action = jnp.array([1.0, 0.0, 0.0])
+    elif step_counter < episode_length // 2:
+        # Phase 2: Turn left while going forward
+        action = jnp.array([0.5, 1.0, 0.0])
+    elif step_counter < 3 * episode_length // 4:
+        # Phase 3: Turn right while going forward
+        action = jnp.array([0.5, -1.0, 0.0])
+    else:
+        # Phase 4: Go forward again
+        action = jnp.array([1.0, 0.0, 0.0])
+
+    return action, {}  # Return action and empty info dict
+
+
+def rollout_avoidance(env, policy_fn=None, mp4_filename="avoidance_rollout.mp4",
+                      seed=0, batch_size=4, episode_length=200):
+    """
+    Rollout avoidance environment and render to MP4
+    """
+
+    # Use default policy if none provided
+    if policy_fn is None:
+        policy_fn = default_manual_policy
+        print("Using default manual policy (forward -> left -> right -> forward)")
+
+    # Wrap for training (handles batching)
     wrapped_env = brax.envs.wrappers.training.wrap(env)
-    # wrapped_env = env
-    # jit_reset = jax.vmap(jax.jit(wrapped_env.reset))
-    # jit_step = jax.vmap(jax.jit(wrapped_env.step))
 
     jit_reset = jax.jit(wrapped_env.reset)
     jit_step = jax.jit(wrapped_env.step)
 
+    # Initialize state
     rng_key, rng_init = jax.random.split(jax.random.PRNGKey(seed), 2)
     state = jit_reset(jax.random.split(rng_init, batch_size))
-    action = jnp.zeros((batch_size, 5))
-    state = jit_step(state, action)
-    state = jit_step(state, action)
+
+    print(f"Initial state shapes:")
+    print(f"  obs: {state.obs.shape}")
+    print(f"  done: {state.done.shape}")
+    print(f"  reward: {state.reward.shape}")
+
+    # Store all batch trajectories
+    rollout_batch = [state.pipeline_state]
+    total_reward = jnp.zeros(batch_size)
+
+    # Data logging
+    ctrl_seq = []
+    xy_pos = []
+    reward_seq = []
+    done_seq = []
+    distance_to_goal_seq = []
+
+    print(f"Running {batch_size} parallel rollouts for {episode_length} steps...")
+
+    # Collect trajectories
+    for i in range(episode_length):
+        # Generate actions using policy
+        batch_actions = []
+        for batch_idx in range(batch_size):
+            rng_key, rng_ctrl = jax.random.split(rng_key)
+            action, _ = policy_fn(state.obs[batch_idx], rng_ctrl, i)
+            batch_actions.append(action)
+        ctrl = jnp.stack(batch_actions)
+
+        # Debug: Check action shape
+        if i == 0:
+            print(f"Action shape: {ctrl.shape}")
+
+        # Step simulation
+        try:
+            state = jit_step(state, ctrl)
+        except Exception as e:
+            print(f"Error at step {i}")
+            print(f"State done shape before step: {state.done.shape}")
+            print(f"Action shape: {ctrl.shape}")
+            raise e
+
+        total_reward += state.reward
+
+        # Store trajectory
+        rollout_batch.append(state.pipeline_state)
+
+        # Log data
+        reward_seq.append(state.reward)
+        ctrl_seq.append(ctrl)
+        xy_pos.append(state.pipeline_state.qpos[:, 0:2])
+        done_seq.append(state.done)
+
+        # Extract distance to goal from observations
+        distance_to_goal = state.obs[:, 1] * avoidance.RANGEFINDER_CUTOFF
+        distance_to_goal_seq.append(distance_to_goal)
+
+        # Print progress
+        if i % 50 == 0:
+            avg_reward = jnp.mean(total_reward)
+            any_done = jnp.any(state.done)
+            avg_distance = jnp.mean(distance_to_goal)
+            print(
+                f"Step {i}: avg_reward={avg_reward:.2f}, any_done={any_done}, avg_dist_to_goal={avg_distance:.2f}")
+
+        # Break if all episodes are done
+        if jnp.all(state.done):
+            print(f"All episodes finished at step {i}")
+            break
+
+    # Rest of the function remains the same...
+    # Convert to arrays
+    ctrl_seq = jnp.stack(ctrl_seq)
+    xy_pos = jnp.stack(xy_pos)
+    reward_seq = jnp.stack(reward_seq)
+    done_seq = jnp.stack(done_seq)
+    distance_to_goal_seq = jnp.stack(distance_to_goal_seq)
+
+    print(f"Rollout complete. Final rewards: {total_reward}")
+
+    # Render all trajectories
+    print("Rendering trajectories...")
+    all_frames = []
+
+    for batch_idx in range(batch_size):
+        print(f"Rendering trajectory {batch_idx + 1}/{batch_size}")
+
+        # Extract individual trajectory
+        individual_rollout = []
+        for rollout_state in rollout_batch:
+            individual_state = jax.tree.map(lambda x: x[batch_idx], rollout_state)
+            individual_rollout.append(individual_state)
+
+        # Render this trajectory
+        trajectory_frames = env.render(individual_rollout, width=480, height=320)
+        all_frames.extend(trajectory_frames)
+
+        # Add separator frames between trajectories
+        if batch_idx < batch_size - 1:
+            separator_frame = np.zeros_like(trajectory_frames[0])
+            all_frames.extend([separator_frame] * 30)
+
+    # Save video
+    print(f"Saving video to {mp4_filename}")
+    mediapy.write_video(mp4_filename, all_frames, fps=30)
+
+    return {
+        'ctrl_seq': ctrl_seq,
+        'xy_pos': xy_pos,
+        'reward_seq': reward_seq,
+        'done_seq': done_seq,
+        'distance_to_goal_seq': distance_to_goal_seq,
+        'total_reward': total_reward,
+        'frames': all_frames
+    }
 
 
-    import jax
-    import mediapy
-    # import brax.envs.wrappers.training
-    import numpy as np
-
-
-    def default_manual_policy(obs, rng, step_counter):
-        """
-        Default manual policy for testing
-
-        Args:
-            obs: Observation (not used in this simple policy)
-            rng: Random key (not used)
-            step_counter: Current step number for phased control
-
-        Returns:
-            action: [drive, steer, brake]
-        """
-        episode_length = 300  # Should match the episode_length in rollout
-
-        if step_counter < episode_length // 4:
-            # Phase 1: Go forward
-            action = jnp.array([1.0, 0.0, 0.0])
-        elif step_counter < episode_length // 2:
-            # Phase 2: Turn left while going forward
-            action = jnp.array([0.5, 1.0, 0.0])
-        elif step_counter < 3 * episode_length // 4:
-            # Phase 3: Turn right while going forward
-            action = jnp.array([0.5, -1.0, 0.0])
-        else:
-            # Phase 4: Go forward again
-            action = jnp.array([1.0, 0.0, 0.0])
-
-        return action, {}  # Return action and empty info dict
-
+if __name__ == '__main__':
 
     def simple_goal_seeking_policy(obs, rng, step_counter):
         """
@@ -234,143 +348,6 @@ if __name__ == '__main__':
         action = jnp.array([drive, steer, brake])
         return action, {}
 
-
-    def rollout_avoidance(env, policy_fn=None, mp4_filename="avoidance_rollout.mp4",
-                          seed=0, batch_size=4, episode_length=200):
-        """
-        Rollout avoidance environment and render to MP4
-        """
-
-        # Use default policy if none provided
-        if policy_fn is None:
-            policy_fn = default_manual_policy
-            print("Using default manual policy (forward -> left -> right -> forward)")
-
-        # Wrap for training (handles batching)
-        wrapped_env = brax.envs.wrappers.training.wrap(env)
-
-        jit_reset = jax.jit(wrapped_env.reset)
-        jit_step = jax.jit(wrapped_env.step)
-
-        # Initialize state
-        rng_key, rng_init = jax.random.split(jax.random.PRNGKey(seed), 2)
-        state = jit_reset(jax.random.split(rng_init, batch_size))
-
-        print(f"Initial state shapes:")
-        print(f"  obs: {state.obs.shape}")
-        print(f"  done: {state.done.shape}")
-        print(f"  reward: {state.reward.shape}")
-
-        # Store all batch trajectories
-        rollout_batch = [state.pipeline_state]
-        total_reward = jnp.zeros(batch_size)
-
-        # Data logging
-        ctrl_seq = []
-        xy_pos = []
-        reward_seq = []
-        done_seq = []
-        distance_to_goal_seq = []
-
-        print(f"Running {batch_size} parallel rollouts for {episode_length} steps...")
-
-        # Collect trajectories
-        for i in range(episode_length):
-            # Generate actions using policy
-            batch_actions = []
-            for batch_idx in range(batch_size):
-                rng_key, rng_ctrl = jax.random.split(rng_key)
-                action, _ = policy_fn(state.obs[batch_idx], rng_ctrl, i)
-                batch_actions.append(action)
-            ctrl = jnp.stack(batch_actions)
-
-            # Debug: Check action shape
-            if i == 0:
-                print(f"Action shape: {ctrl.shape}")
-
-            # Step simulation
-            try:
-                state = jit_step(state, ctrl)
-            except Exception as e:
-                print(f"Error at step {i}")
-                print(f"State done shape before step: {state.done.shape}")
-                print(f"Action shape: {ctrl.shape}")
-                raise e
-
-            total_reward += state.reward
-
-            # Store trajectory
-            rollout_batch.append(state.pipeline_state)
-
-            # Log data
-            reward_seq.append(state.reward)
-            ctrl_seq.append(ctrl)
-            xy_pos.append(state.pipeline_state.qpos[:, 0:2])
-            done_seq.append(state.done)
-
-            # Extract distance to goal from observations
-            distance_to_goal = state.obs[:, 1] * avoidance.RANGEFINDER_CUTOFF
-            distance_to_goal_seq.append(distance_to_goal)
-
-            # Print progress
-            if i % 50 == 0:
-                avg_reward = jnp.mean(total_reward)
-                any_done = jnp.any(state.done)
-                avg_distance = jnp.mean(distance_to_goal)
-                print(
-                    f"Step {i}: avg_reward={avg_reward:.2f}, any_done={any_done}, avg_dist_to_goal={avg_distance:.2f}")
-
-            # Break if all episodes are done
-            if jnp.all(state.done):
-                print(f"All episodes finished at step {i}")
-                break
-
-        # Rest of the function remains the same...
-        # Convert to arrays
-        ctrl_seq = jnp.stack(ctrl_seq)
-        xy_pos = jnp.stack(xy_pos)
-        reward_seq = jnp.stack(reward_seq)
-        done_seq = jnp.stack(done_seq)
-        distance_to_goal_seq = jnp.stack(distance_to_goal_seq)
-
-        print(f"Rollout complete. Final rewards: {total_reward}")
-
-        # Render all trajectories
-        print("Rendering trajectories...")
-        all_frames = []
-
-        for batch_idx in range(batch_size):
-            print(f"Rendering trajectory {batch_idx + 1}/{batch_size}")
-
-            # Extract individual trajectory
-            individual_rollout = []
-            for rollout_state in rollout_batch:
-                individual_state = jax.tree.map(lambda x: x[batch_idx], rollout_state)
-                individual_rollout.append(individual_state)
-
-            # Render this trajectory
-            trajectory_frames = env.render(individual_rollout, width=480, height=320)
-            all_frames.extend(trajectory_frames)
-
-            # Add separator frames between trajectories
-            if batch_idx < batch_size - 1:
-                separator_frame = np.zeros_like(trajectory_frames[0])
-                all_frames.extend([separator_frame] * 30)
-
-        # Save video
-        print(f"Saving video to {mp4_filename}")
-        mediapy.write_video(mp4_filename, all_frames, fps=30)
-
-        return {
-            'ctrl_seq': ctrl_seq,
-            'xy_pos': xy_pos,
-            'reward_seq': reward_seq,
-            'done_seq': done_seq,
-            'distance_to_goal_seq': distance_to_goal_seq,
-            'total_reward': total_reward,
-            'frames': all_frames
-        }
-
     base_env = envs.get_environment('avoidance_v1')
     env = ForwardTurnBrake(base_env)
 
@@ -386,3 +363,13 @@ if __name__ == '__main__':
     )
 
     # Example 2: Use goal-s
+    # Example 1: Use default manual policy
+    print("=== Running with simple_goal_seeking_policy ===")
+    results1 = rollout_avoidance(
+        env=env,
+        policy_fn=simple_goal_seeking_policy,  # Uses default_manual_policy
+        mp4_filename="avoidance_goal_seeking.mp4",
+        seed=42,
+        batch_size=2,
+        episode_length=300
+    )
