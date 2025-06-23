@@ -2,6 +2,7 @@ import mujoco
 import mujoco.viewer
 import time
 
+
 xml = """
 <mujoco model="vehicle_with_brakes">
   <option timestep="0.01"/>
@@ -24,8 +25,7 @@ xml = """
       <geom name="box" type="box" size="0.3 0.15 0.05" material="vehicle_material"
             friction="0.8 0.1 0.1"/>
 
-      <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" 
-            quat="0.707 0 0 0.707"/>
+      <site name="control_site" pos="0 0 0" size="0.02" rgba="1 0 0 1" />
 
       <!-- Visual indicator for front -->
       <geom name="front_indicator" type="sphere" size="0.03" pos="0.25 0 0" 

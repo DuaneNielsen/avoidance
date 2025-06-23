@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Quaternion MCP Server - HTTP Version
+Quaternion MCP Server - FastMCP Version
 
 Provides quaternion utilities with human-readable explanations.
 Just quaternions - nothing else!
-Serves over HTTP for Claude Desktop integration.
+Uses FastMCP for proper MCP protocol compliance.
 """
 
 import numpy as np
-from typing import List, Any, Dict
-from flask import Flask, request, jsonify
-import json
+from typing import List
+import asyncio
 
 # Try to import MuJoCo for better quaternion operations
 try:
@@ -20,7 +19,15 @@ try:
 except ImportError:
     MUJOCO_AVAILABLE = False
 
-app = Flask(__name__)
+# Import FastMCP
+try:
+    from fastmcp import FastMCP
+except ImportError:
+    print("Error: FastMCP not installed. Install with: pip install fastmcp")
+    exit(1)
+
+# Create the MCP server
+mcp = FastMCP("Quaternion Server")
 
 
 # ============================================================================
@@ -100,159 +107,19 @@ def quat_string(q):
 
 
 # ============================================================================
-# MCP HTTP ENDPOINTS
+# MCP TOOLS
 # ============================================================================
 
-@app.route('/mcp/info', methods=['GET'])
-def mcp_info():
-    """Return MCP server information"""
-    return jsonify({
-        "name": "Quaternion Server",
-        "version": "1.0.0",
-        "description": "Provides quaternion utilities with human-readable explanations",
-        "mujoco_available": MUJOCO_AVAILABLE
-    })
+@mcp.tool()
+def explain_quaternion(quaternion: List[float]) -> str:
+    """Explain what a quaternion represents in human terms
 
+    Args:
+        quaternion: List of 4 float components [w, x, y, z]
 
-@app.route('/mcp/tools', methods=['GET'])
-def list_tools():
-    """List available MCP tools"""
-    tools = [
-        {
-            "name": "explain_quaternion",
-            "description": "Explain what a quaternion represents in human terms",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "quaternion": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "[w, x, y, z] quaternion components"
-                    }
-                },
-                "required": ["quaternion"]
-            }
-        },
-        {
-            "name": "create_rotation",
-            "description": "Create a rotation quaternion from axis and angle",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "axis": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "Rotation axis [x, y, z]"
-                    },
-                    "angle": {
-                        "type": "number",
-                        "description": "Angle in degrees"
-                    }
-                },
-                "required": ["axis", "angle"]
-            }
-        },
-        {
-            "name": "multiply_quaternions",
-            "description": "Multiply two quaternions (composition of rotations)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "q1": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "First quaternion [w, x, y, z]"
-                    },
-                    "q2": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "Second quaternion [w, x, y, z]"
-                    }
-                },
-                "required": ["q1", "q2"]
-            }
-        },
-        {
-            "name": "basic_rotations",
-            "description": "Create basic rotations around X, Y, or Z axes",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "axis": {
-                        "type": "string",
-                        "description": "\"x\", \"y\", or \"z\""
-                    },
-                    "angle": {
-                        "type": "number",
-                        "description": "Angle in degrees"
-                    }
-                },
-                "required": ["axis", "angle"]
-            }
-        },
-        {
-            "name": "quaternion_inverse",
-            "description": "Get the inverse (conjugate) of a quaternion",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "quaternion": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "[w, x, y, z] quaternion components"
-                    }
-                },
-                "required": ["quaternion"]
-            }
-        },
-        {
-            "name": "quaternion_examples",
-            "description": "Get common quaternion examples with explanations",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    ]
-    return jsonify({"tools": tools})
-
-
-@app.route('/mcp/call', methods=['POST'])
-def call_tool():
-    """Execute an MCP tool"""
-    try:
-        data = request.json
-        tool_name = data.get('tool')
-        arguments = data.get('arguments', {})
-
-        if tool_name == 'explain_quaternion':
-            result = explain_quaternion_impl(arguments.get('quaternion', []))
-        elif tool_name == 'create_rotation':
-            result = create_rotation_impl(arguments.get('axis', []), arguments.get('angle', 0))
-        elif tool_name == 'multiply_quaternions':
-            result = multiply_quaternions_impl(arguments.get('q1', []), arguments.get('q2', []))
-        elif tool_name == 'basic_rotations':
-            result = basic_rotations_impl(arguments.get('axis', ''), arguments.get('angle', 0))
-        elif tool_name == 'quaternion_inverse':
-            result = quaternion_inverse_impl(arguments.get('quaternion', []))
-        elif tool_name == 'quaternion_examples':
-            result = quaternion_examples_impl()
-        else:
-            return jsonify({"error": f"Unknown tool: {tool_name}"}), 400
-
-        return jsonify({"result": result})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ============================================================================
-# TOOL IMPLEMENTATIONS
-# ============================================================================
-
-def explain_quaternion_impl(quaternion: List[float]) -> str:
-    """Explain what a quaternion represents in human terms"""
+    Returns:
+        Human-readable explanation of the quaternion
+    """
     if len(quaternion) != 4:
         return "Error: Quaternion must have 4 components [w, x, y, z]"
 
@@ -267,8 +134,17 @@ def explain_quaternion_impl(quaternion: List[float]) -> str:
     return result
 
 
-def create_rotation_impl(axis: List[float], angle: float) -> str:
-    """Create a rotation quaternion from axis and angle"""
+@mcp.tool()
+def create_rotation(axis: List[float], angle: float) -> str:
+    """Create a rotation quaternion from axis and angle
+
+    Args:
+        axis: Rotation axis as [x, y, z]
+        angle: Angle in degrees
+
+    Returns:
+        Quaternion representation and description
+    """
     if len(axis) != 3:
         return "Error: Axis must have 3 components [x, y, z]"
 
@@ -278,8 +154,17 @@ def create_rotation_impl(axis: List[float], angle: float) -> str:
     return f"Rotation: {angle}° around {axis}\nQuaternion: {quat_string(q)}\nRepresents: {description}"
 
 
-def multiply_quaternions_impl(q1: List[float], q2: List[float]) -> str:
-    """Multiply two quaternions (composition of rotations)"""
+@mcp.tool()
+def multiply_quaternions(q1: List[float], q2: List[float]) -> str:
+    """Multiply two quaternions (composition of rotations)
+
+    Args:
+        q1: First quaternion [w, x, y, z]
+        q2: Second quaternion [w, x, y, z]
+
+    Returns:
+        Result of quaternion multiplication with description
+    """
     if len(q1) != 4 or len(q2) != 4:
         return "Error: Both quaternions must have 4 components"
 
@@ -288,8 +173,17 @@ def multiply_quaternions_impl(q1: List[float], q2: List[float]) -> str:
     return f"Quaternion multiplication:\n{quat_string(q1)} × {quat_string(q2)} = {quat_string(result)}\nResult represents: {describe_quaternion(result)}"
 
 
-def basic_rotations_impl(axis: str, angle: float) -> str:
-    """Create basic rotations around X, Y, or Z axes"""
+@mcp.tool()
+def basic_rotations(axis: str, angle: float) -> str:
+    """Create basic rotations around X, Y, or Z axes
+
+    Args:
+        axis: "x", "y", or "z"
+        angle: Angle in degrees
+
+    Returns:
+        Quaternion for the basic rotation
+    """
     axis_map = {"x": [1, 0, 0], "y": [0, 1, 0], "z": [0, 0, 1]}
 
     if axis.lower() not in axis_map:
@@ -301,8 +195,16 @@ def basic_rotations_impl(axis: str, angle: float) -> str:
     return f"{angle}° rotation around {axis.upper()}-axis:\nQuaternion: {quat_string(q)}\nRepresents: {description}"
 
 
-def quaternion_inverse_impl(quaternion: List[float]) -> str:
-    """Get the inverse (conjugate) of a quaternion"""
+@mcp.tool()
+def quaternion_inverse(quaternion: List[float]) -> str:
+    """Get the inverse (conjugate) of a quaternion
+
+    Args:
+        quaternion: Quaternion components [w, x, y, z]
+
+    Returns:
+        Inverse quaternion with description
+    """
     if len(quaternion) != 4:
         return "Error: Quaternion must have 4 components"
 
@@ -312,8 +214,13 @@ def quaternion_inverse_impl(quaternion: List[float]) -> str:
     return f"Original: {quat_string(q)}\nInverse: {quat_string(inverse)}\nInverse represents: {describe_quaternion(inverse)}"
 
 
-def quaternion_examples_impl() -> str:
-    """Get common quaternion examples with explanations"""
+@mcp.tool()
+def quaternion_examples() -> str:
+    """Get common quaternion examples with explanations
+
+    Returns:
+        List of common quaternions and what they represent
+    """
     examples = [
         ([1, 0, 0, 0], "Identity - no rotation"),
         ([0.707, 0.707, 0, 0], "90° pitch up (X-axis)"),
@@ -335,20 +242,53 @@ def quaternion_examples_impl() -> str:
 
 
 # ============================================================================
-# HEALTH CHECK
+# RESOURCE (Optional - for server info)
 # ============================================================================
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({"status": "healthy", "mujoco": MUJOCO_AVAILABLE})
+@mcp.resource("server://info")
+def server_info() -> str:
+    """Get server information and capabilities"""
+    return f"""Quaternion MCP Server
+Version: 1.0.0
+Description: Provides quaternion utilities with human-readable explanations
+MuJoCo Available: {MUJOCO_AVAILABLE}
 
+Available Tools:
+- explain_quaternion: Explain what a quaternion represents
+- create_rotation: Create rotation quaternion from axis/angle  
+- multiply_quaternions: Multiply two quaternions
+- basic_rotations: Create basic X/Y/Z axis rotations
+- quaternion_inverse: Get quaternion inverse/conjugate
+- quaternion_examples: Common quaternion examples
+"""
+
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
-    print("🔄 Quaternion MCP Server (HTTP)")
-    print(f"MuJoCo: {'✓' if MUJOCO_AVAILABLE else '✗'}")
-    print("Starting HTTP server on http://localhost:5000")
-    print("Ready to serve quaternion tools!")
+    import sys
 
-    # Run the Flask server
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    print("Quaternion MCP Server (FastMCP)")
+    print(f"MuJoCo: {'OK' if MUJOCO_AVAILABLE else 'Not Available'}")
+
+    # Check if running with HTTP transport argument
+    if len(sys.argv) > 1 and sys.argv[1] == "--http":
+        print("Starting MCP server with HTTP transport...")
+        print("Server will be available at http://localhost:5000/mcp")
+        print("Ready to serve quaternion tools via MCP protocol!")
+
+        # Run with HTTP transport
+        asyncio.run(mcp.run(
+            transport="streamable-http",
+            host="127.0.0.1",
+            port=5000,
+            path="/mcp"
+        ))
+    else:
+        print("Starting MCP server with STDIO transport...")
+        print("Ready to serve quaternion tools via MCP protocol!")
+
+        # Run with STDIO transport (default for Claude Desktop)
+        asyncio.run(mcp.run(transport="stdio"))
