@@ -203,6 +203,14 @@ def read_collision_sensors(data):
     return np.abs(data.sensordata[9:11]), np.abs(data.sensordata[11:13])
 
 
+def read_goal_sensor(data):
+    goal_xy_in_vehicle_frame = data.sensordata[6:8]
+    distance = np.linalg.norm(goal_xy_in_vehicle_frame)
+    normalized_goal_xy_in_vehicle_frame = goal_xy_in_vehicle_frame / distance
+    angle = np.arctan(normalized_goal_xy_in_vehicle_frame[1:2], normalized_goal_xy_in_vehicle_frame[0:1])
+    return distance, angle
+
+
 def collision_detected(data):
     left_right, front_rear = read_collision_sensors(data)
     side_collision = left_right < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
@@ -274,6 +282,9 @@ def site_local_to_world_simple(model, data, site_name, local_coords):
 model = mujoco.MjModel.from_xml_string(xml)
 data = mujoco.MjData(model)
 
+goal_vec_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, 'goal_vec')
+
+
 # Generate terrain with flattened center
 nrow, ncol = 128, 128
 terrain_data = generate_terrain_with_flat_center(
@@ -295,10 +306,10 @@ timestep = 1 / 60.0
 forward_vel = 0.0
 rotate_vel = 0.0
 brake_force = 0.0
-
+auto_mode = False
 
 def key_callback(keycode):
-    global forward_vel, rotate_vel, brake_force
+    global forward_vel, rotate_vel, brake_force, auto_mode
 
     if keycode == 32:  # Spacebar - BRAKE
         forward_vel = 0.0
@@ -323,7 +334,8 @@ def key_callback(keycode):
         rotate_vel = -1.0
         brake_force = 0.0
         print("ROTATE RIGHT")
-
+    elif keycode == 344: # Right shift, toggle PID control
+        auto_mode = not auto_mode
 
 print("Vehicle with Ghost Vector Visualization Demo")
 print("=" * 50)
@@ -340,6 +352,9 @@ print("- Yellow marker: Vector midpoint")
 print("- Red rays: Rangefinder sensors")
 print("- Ghost objects don't interfere with sensors or physics!")
 print("=" * 50)
+
+from collections import deque
+rot_I = deque(maxlen=5)
 
 # Run simulation with ghost vector visualization
 with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
@@ -360,6 +375,15 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
         data.ctrl[3] = brake_force  # Y brake
         data.ctrl[4] = brake_force  # Rotation brake
 
+        if auto_mode:
+            # dodgy control scheme
+            distance, angle = read_goal_sensor(data)
+            rot_P = 0.5 * angle
+            steer_angle = rot_P + sum(rot_I)
+            rot_I.appendleft(rot_P)
+            data.ctrl[1] = steer_angle[0]
+            data.ctrl[0] = np.maximum(0.3 * distance, 2.0)
+
         # Step physics
         mujoco.mj_step(model, data)
 
@@ -367,6 +391,7 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
         # vehicle_pos = data.sensordata[0:3]
         # goal_pos = data.sensordata[3:6]
         vector_to_goal_vehicle_frame = data.sensordata[6:9]
+        print(vector_to_goal_vehicle_frame)
 
         goal_pos = site_local_to_world_simple(model, data, 'control_site', vector_to_goal_vehicle_frame)
         vehicle_pos = site_local_to_world_simple(model, data, 'control_site', np.zeros(3))
