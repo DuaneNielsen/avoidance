@@ -44,6 +44,10 @@ RANGEFINDER_SENSOR_PREFIX = 'rangefinder'
 RANGEFINDER_SITE_PREFIX = 'site_rangefinder'
 RANGEFINDER_CUTOFF = 4.83
 
+CAMERA_TRACK_VEHICLE = 'track_vehicle'
+CAMERA_PERSPECTIVE = 'perspective'
+CAMERA_FIRST_PERSON = 'first_person'
+
 sensor_site_xml = ""
 sensor_rangefinders_xml = ""
 rangefinder_angles = np.linspace(start=-SENSOR_ANGLE_DEGREES, stop=SENSOR_ANGLE_DEGREES, num=NUM_SENSORS)
@@ -76,7 +80,7 @@ xml = f"""
 
   <worldbody>
     <light name="top" pos="0 0 8" dir="0 0 -1"/>
-    <camera name='perspective' pos="-7.028 -5.392 6.348" xyaxes="0.609 -0.793 0.000 0.462 0.355 0.813"/>
+    <camera name="{CAMERA_PERSPECTIVE}" pos="-7.028 -5.392 6.348" xyaxes="0.609 -0.793 0.000 0.462 0.355 0.813"/>
     
 
     <!-- Heightfield terrain -->
@@ -84,8 +88,8 @@ xml = f"""
           friction="0.8 0.1 0.1"/>
 
     <body name="vehicle" pos="{VEHICLE_START_POS}">
-      <camera name="track_vehicle" pos="0 0 10" mode="track"/>
-      <camera name="first_person" pos="-1 0 0.3" xyaxes="0 -1 0 0 0.3 1"/>
+      <camera name="{CAMERA_TRACK_VEHICLE}" pos="0 0 10" mode="track"/>
+      <camera name="{CAMERA_FIRST_PERSON}" pos="-1 0 0.3" xyaxes="0 -1 0 0 0.3 1"/>
       <joint name="slide_x" type="slide" axis="1 0 0" damping="1.0"/>
       <joint name="slide_y" type="slide" axis="0 1 0" damping="1.0"/>
       <joint name="rotate_z" type="hinge" axis="0 0 1" damping="0.5"/>

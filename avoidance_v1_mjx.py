@@ -171,7 +171,7 @@ def default_manual_policy(obs, rng, step_counter):
 
 
 def rollout_avoidance(env, policy_fn=None, mp4_filename="avoidance_rollout.mp4",
-                      seed=0, batch_size=4, episode_length=200):
+                      seed=0, batch_size=4, episode_length=200, camera=avoidance.CAMERA_PERSPECTIVE):
     """
     Rollout avoidance environment and render to MP4
     """
@@ -284,7 +284,7 @@ def rollout_avoidance(env, policy_fn=None, mp4_filename="avoidance_rollout.mp4",
             individual_rollout.append(individual_state)
 
         # Render this trajectory
-        trajectory_frames = env.render(individual_rollout, width=480, height=320)
+        trajectory_frames = env.render(individual_rollout, width=640, height=480, camera=camera)
         all_frames.extend(trajectory_frames)
 
         # Add separator frames between trajectories
@@ -308,6 +308,8 @@ def rollout_avoidance(env, policy_fn=None, mp4_filename="avoidance_rollout.mp4",
 
 
 if __name__ == '__main__':
+
+    from tqdm import tqdm
 
     def simple_goal_seeking_policy(obs, rng, step_counter):
         """
@@ -359,7 +361,8 @@ if __name__ == '__main__':
         mp4_filename="avoidance_manual.mp4",
         seed=42,
         batch_size=2,
-        episode_length=300
+        episode_length=300,
+        camera=avoidance.CAMERA_TRACK_VEHICLE
     )
 
     # Example 2: Use goal-s
@@ -371,5 +374,6 @@ if __name__ == '__main__':
         mp4_filename="avoidance_goal_seeking.mp4",
         seed=42,
         batch_size=2,
-        episode_length=300
+        episode_length=300,
+        camera=avoidance.CAMERA_FIRST_PERSON
     )
