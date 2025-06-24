@@ -42,6 +42,17 @@ def collision_detected(model, data):
 class AvoidanceMJX(PipelineEnv):
     def __init__(self, **kwargs):
         self.mj_model_cpu = mujoco.MjModel.from_xml_string(avoidance.xml)
+        nrow, ncol = 128, 128
+        terrain_data = avoidance.generate_terrain_with_flat_center(
+            nrow=nrow,
+            ncol=ncol,
+            hills_x=6,
+            hills_y=6,
+            hill_height=0.6,
+            hill_radius=0.25,
+            flat_radius=1.5
+        )
+        self.mj_model_cpu.hfield_data[:] = terrain_data
         sys = mjcf.load_model(self.mj_model_cpu)
         super().__init__(sys, **kwargs)
 
