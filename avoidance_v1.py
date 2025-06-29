@@ -2,6 +2,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 import time
+import cv2
 import quaterion as quat
 
 """
@@ -241,6 +242,60 @@ def read_goal_sensor(model, data):
     angle = np.arctan(normalized_goal_xy_in_vehicle_frame[1:2], normalized_goal_xy_in_vehicle_frame[0:1])
     return distance, angle
 
+
+def read_rangefinder_array(model_cpu, data):
+    sensor_id = mujoco.mj_name2id(model_cpu, mujoco.mjtObj.mjOBJ_SENSOR, RANGEFINDER_SENSOR_PREFIX + '0')
+    RANGEFINDER_0 = model_cpu.sensor_adr[sensor_id]
+    return data.sensordata[RANGEFINDER_0:]
+
+
+def normalize_rangefinders(rangefinder_array):
+    rangefinder_norm = np.where(rangefinder_array == -1., RANGEFINDER_CUTOFF, rangefinder_array) / RANGEFINDER_CUTOFF
+    return 1. - rangefinder_norm
+
+
+def create_rangefinder_visualization(normalized_ranges, strip_height=50, strip_width=None):
+    """Create a horizontal strip visualization of rangefinder data.
+    
+    Args:
+        normalized_ranges: Array of normalized rangefinder values (0-1)
+        strip_height: Height of the visualization strip in pixels
+        strip_width: Width per sensor (if None, auto-calculated)
+    
+    Returns:
+        BGR image array for OpenCV display
+    """
+    num_sensors = len(normalized_ranges)
+    
+    if strip_width is None:
+        strip_width = max(8, 640 // num_sensors)  # At least 8 pixels per sensor, max 640 total width
+    
+    total_width = num_sensors * strip_width
+    
+    # Create grayscale image: 0 = black (far), 255 = white (close)
+    grayscale_values = (normalized_ranges * 255).astype(np.uint8)
+    
+    # Create the strip by repeating each value strip_width times horizontally
+    strip = np.repeat(grayscale_values.reshape(1, -1), strip_height, axis=0)
+    strip = np.repeat(strip, strip_width, axis=1)
+    
+    # Convert to BGR for OpenCV (all channels same for grayscale)
+    bgr_strip = cv2.cvtColor(strip, cv2.COLOR_GRAY2BGR)
+    
+    # Add sensor index labels every 10th sensor
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.3
+    font_thickness = 1
+    text_color = (0, 255, 0)  # Green text
+    
+    for i in range(0, num_sensors, 10):
+        x_pos = i * strip_width + 2
+        y_pos = strip_height - 5
+        cv2.putText(bgr_strip, str(i), (x_pos, y_pos), font, font_scale, text_color, font_thickness)
+    
+    return bgr_strip
+
+
 def collision_detected(model, data):
     left, right, front, rear = read_collision_sensors(model, data)
     left_collision = left < (VEHICLE_LENGTH + VEHICLE_COLLISION) * 2
@@ -393,11 +448,13 @@ if __name__ == '__main__':
     print("  ← : Rotate Left")
     print("  → : Rotate Right")
     print("  SPACE : BRAKE (stops all movement)")
+    print("  Right Shift : Toggle auto-mode")
     print()
     print("Features:")
     print("- Blue vector: Vehicle to goal (ghost object, no physics)")
-    print("- Yellow marker: Vector midpoint")
-    print("- Red rays: Rangefinder sensors")
+    print("- Red rays: Rangefinder sensors in MuJoCo viewer")
+    print("- Rangefinder CV2 window: White = close obstacles, Black = far/no obstacles")
+    print("- Green numbers show sensor indices (0-63)")
     print("- Ghost objects don't interfere with sensors or physics!")
     print("=" * 50)
 
@@ -426,6 +483,7 @@ if __name__ == '__main__':
             if auto_mode:
                 # dodgy control scheme
                 distance, angle = read_goal_sensor(model, data)
+
                 rot_P = 0.5 * angle
                 steer_angle = rot_P + sum(rot_I)
                 rot_I.appendleft(rot_P)
@@ -434,6 +492,21 @@ if __name__ == '__main__':
 
             # Step physics
             mujoco.mj_step(model, data)
+
+            rangefinder = read_rangefinder_array(model, data)
+            rangefinder_normalized = normalize_rangefinders(rangefinder)
+            
+            # Create rangefinder visualization
+            rangefinder_viz = create_rangefinder_visualization(rangefinder_normalized)
+            
+            # Save visualization every 30 steps for demo (in headless environment)
+            if step_count % 30 == 0:
+                cv2.imwrite(f'rangefinder_viz_step_{step_count}.png', rangefinder_viz)
+                print(f"Saved rangefinder visualization at step {step_count}")
+            
+            # In a desktop environment, you would use:
+            # cv2.imshow('Rangefinder Sensors', rangefinder_viz)
+            # cv2.waitKey(1)
 
             # Get vehicle and goal positions from sensors
             # vehicle_pos = data.sensordata[0:3]
@@ -493,8 +566,12 @@ if __name__ == '__main__':
                 time.sleep(0.001)
                 curr = time.time()
 
+    # Clean up OpenCV windows
+    cv2.destroyAllWindows()
+    
     print("\nDemo completed!")
     print("Key takeaways:")
     print("- Ghost vectors don't block rangefinder rays")
     print("- Scene graph visualization has zero physics overhead")
     print("- Perfect for dynamic navigation displays")
+    print("- Real-time rangefinder visualization shows obstacle proximity")
