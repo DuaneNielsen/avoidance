@@ -243,6 +243,41 @@ def read_goal_sensor(model, data):
     return distance, angle
 
 
+def goal_angle_to_onehot(model, data, num_bins=32):
+    """Convert goal angle to one-hot encoding with 32 bins.
+    
+    Args:
+        model: MuJoCo model
+        data: MuJoCo data
+        num_bins: Number of angular bins (default 32)
+    
+    Returns:
+        numpy array: One-hot encoding where:
+        - bin 0: goal is on the left side (-90°)
+        - bins 15-16: goal is dead ahead (0°) 
+        - bin 31: goal is on the right side (+90°)
+    """
+    distance, angle = read_goal_sensor(model, data)
+    
+    # Convert angle from [-pi/2, pi/2] to [0, num_bins-1]
+    # angle is in radians, where -pi/2 is left, 0 is ahead, +pi/2 is right
+    angle_degrees = np.degrees(angle[0])  # Convert to degrees and extract scalar
+    
+    # Map from [-90, +90] degrees to [31, 0] (reversed)
+    # -90° -> bin 31, 0° -> bin 15.5 (rounds to 15 or 16), +90° -> bin 0
+    normalized_angle = (angle_degrees + 90.0) / 180.0  # Map [-90,90] to [0,1]
+    bin_index = int((1.0 - normalized_angle) * (num_bins - 1))  # Reverse and map [0,1] to [31,0]
+    
+    # Clamp to valid range
+    bin_index = np.clip(bin_index, 0, num_bins - 1)
+    
+    # Create one-hot encoding
+    onehot = np.zeros(num_bins)
+    onehot[bin_index] = 1.0
+    
+    return onehot
+
+
 def read_rangefinder_array(model_cpu, data):
     sensor_id = mujoco.mj_name2id(model_cpu, mujoco.mjtObj.mjOBJ_SENSOR, RANGEFINDER_SENSOR_PREFIX + '0')
     RANGEFINDER_0 = model_cpu.sensor_adr[sensor_id]
@@ -254,11 +289,12 @@ def normalize_rangefinders(rangefinder_array):
     return 1. - rangefinder_norm
 
 
-def create_rangefinder_visualization(normalized_ranges, strip_height=50, strip_width=None):
-    """Create a horizontal strip visualization of rangefinder data.
+def create_rangefinder_visualization(normalized_ranges, goal_onehot=None, strip_height=50, strip_width=None):
+    """Create a horizontal strip visualization of rangefinder data with optional goal indicator.
     
     Args:
         normalized_ranges: Array of normalized rangefinder values (0-1)
+        goal_onehot: Optional one-hot encoded goal direction (32 bins)
         strip_height: Height of the visualization strip in pixels
         strip_width: Width per sensor (if None, auto-calculated)
     
@@ -272,15 +308,41 @@ def create_rangefinder_visualization(normalized_ranges, strip_height=50, strip_w
     
     total_width = num_sensors * strip_width
     
+    # Calculate total height: rangefinder strip + goal strip
+    goal_strip_height = 20 if goal_onehot is not None else 0
+    total_height = strip_height + goal_strip_height
+    
     # Create grayscale image: 0 = black (far), 255 = white (close)
     grayscale_values = (normalized_ranges * 255).astype(np.uint8)
     
-    # Create the strip by repeating each value strip_width times horizontally
-    strip = np.repeat(grayscale_values.reshape(1, -1), strip_height, axis=0)
-    strip = np.repeat(strip, strip_width, axis=1)
+    # Create the rangefinder strip by repeating each value strip_width times horizontally
+    rangefinder_strip = np.repeat(grayscale_values.reshape(1, -1), strip_height, axis=0)
+    rangefinder_strip = np.repeat(rangefinder_strip, strip_width, axis=1)
     
     # Convert to BGR for OpenCV (all channels same for grayscale)
-    bgr_strip = cv2.cvtColor(strip, cv2.COLOR_GRAY2BGR)
+    bgr_strip = cv2.cvtColor(rangefinder_strip, cv2.COLOR_GRAY2BGR)
+    
+    # Add goal visualization if provided
+    if goal_onehot is not None:
+        # Create goal strip with blue color where goal is detected
+        goal_strip = np.zeros((goal_strip_height, total_width, 3), dtype=np.uint8)
+        
+        # Map 32 goal bins to sensor positions
+        bins_per_sensor = len(goal_onehot) / num_sensors
+        
+        for i, goal_value in enumerate(goal_onehot):
+            if goal_value > 0:  # Goal detected in this bin
+                # Map goal bin to sensor range
+                start_sensor = int(i / bins_per_sensor)
+                end_sensor = int((i + 1) / bins_per_sensor)
+                
+                for sensor_idx in range(start_sensor, min(end_sensor + 1, num_sensors)):
+                    x_start = sensor_idx * strip_width
+                    x_end = (sensor_idx + 1) * strip_width
+                    goal_strip[:, x_start:x_end] = [255, 0, 0]  # Blue in BGR format
+        
+        # Combine rangefinder and goal strips vertically
+        bgr_strip = np.vstack([bgr_strip, goal_strip])
     
     # Add sensor index labels every 10th sensor
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -496,8 +558,11 @@ if __name__ == '__main__':
             rangefinder = read_rangefinder_array(model, data)
             rangefinder_normalized = normalize_rangefinders(rangefinder)
             
-            # Create and display rangefinder visualization
-            rangefinder_viz = create_rangefinder_visualization(rangefinder_normalized)
+            # Get goal direction as one-hot encoding
+            goal_onehot = goal_angle_to_onehot(model, data)
+            
+            # Create and display rangefinder visualization with goal indicator
+            rangefinder_viz = create_rangefinder_visualization(rangefinder_normalized, goal_onehot)
             cv2.imshow('Rangefinder Sensors', rangefinder_viz)
             cv2.waitKey(1)  # Non-blocking update
             
