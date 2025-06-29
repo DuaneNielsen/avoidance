@@ -1,0 +1,20 @@
+# Auto-generated requirements file
+# Run: python generate_requirements.py to update
+
+absl-py
+brax
+etils
+flax
+jax[cpu]
+matplotlib
+mediapy
+ml-collections
+mujoco
+numpy
+opencv-python==4.11.0.86
+orbax-checkpoint
+playground
+rscope
+tensorboardX
+tqdm
+wandb
