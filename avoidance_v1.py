@@ -289,7 +289,7 @@ def normalize_rangefinders(rangefinder_array):
     return 1. - rangefinder_norm
 
 
-def create_rangefinder_visualization(normalized_ranges, goal_onehot=None, strip_height=50, strip_width=None):
+def create_rangefinder_visualization(normalized_ranges, goal_onehot=None, strip_height=80, strip_width=None):
     """Create a horizontal strip visualization of rangefinder data with optional goal indicator.
     
     Args:
@@ -304,12 +304,12 @@ def create_rangefinder_visualization(normalized_ranges, goal_onehot=None, strip_
     num_sensors = len(normalized_ranges)
     
     if strip_width is None:
-        strip_width = max(8, 640 // num_sensors)  # At least 8 pixels per sensor, max 640 total width
+        strip_width = max(16, 1024 // num_sensors)  # At least 16 pixels per sensor, max 1024 total width
     
     total_width = num_sensors * strip_width
     
     # Calculate total height: rangefinder strip + goal strip
-    goal_strip_height = 20 if goal_onehot is not None else 0
+    goal_strip_height = 40 if goal_onehot is not None else 0
     total_height = strip_height + goal_strip_height
     
     # Create grayscale image: 0 = black (far), 255 = white (close)
@@ -525,6 +525,9 @@ if __name__ == '__main__':
 
     # Run simulation with ghost vector visualization
     with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
+        # Set default camera to first person view
+        viewer.cam.fixedcamid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, CAMERA_FIRST_PERSON)
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
         step_count = 0
         last_sensor_print = 0
 
