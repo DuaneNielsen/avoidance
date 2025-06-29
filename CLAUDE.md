@@ -52,6 +52,9 @@ The project uses Python with JAX ecosystem dependencies. Key requirements includ
 - Brax
 - MediaPy for video output
 - Weights & Biases for experiment tracking
+- OpenCV with GUI support for rangefinder visualization
+
+**Note on OpenCV Installation:** When installing OpenCV in virtual environments, pip may timeout due to compilation from source. Use extended timeout (5+ minutes) for installation commands, or install specific versions like `opencv-python==4.11.0.86` to avoid build issues.
 
 ### Sensor Configuration
 
@@ -101,6 +104,16 @@ Vehicle collision detection uses four-point sensors (front, back, left, right).
 - Training generates videos for evaluation
 - Sensor data includes rangefinder arrays and goal direction vectors
 - Collision detection integrated into reward function
+
+## Rangefinder Visualization
+
+The `avoidance_v1.py` simulation includes real-time CV2 rangefinder visualization:
+- **MuJoCo 3D Viewer**: Shows vehicle, terrain, and rangefinder rays
+- **CV2 "Rangefinder Sensors" Window**: Horizontal strip showing obstacle proximity
+  - White squares = close obstacles
+  - Black squares = far/no obstacles  
+  - Green numbers show sensor indices (0-63)
+  - Updates in real-time as vehicle moves
 
 ## Video Generation
 
