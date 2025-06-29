@@ -496,17 +496,15 @@ if __name__ == '__main__':
             rangefinder = read_rangefinder_array(model, data)
             rangefinder_normalized = normalize_rangefinders(rangefinder)
             
-            # Create rangefinder visualization
+            # Create and display rangefinder visualization
             rangefinder_viz = create_rangefinder_visualization(rangefinder_normalized)
+            cv2.imshow('Rangefinder Sensors', rangefinder_viz)
+            cv2.waitKey(1)  # Non-blocking update
             
-            # Save visualization every 30 steps for demo (in headless environment)
+            # Also save visualization every 30 steps for debugging
             if step_count % 30 == 0:
                 cv2.imwrite(f'rangefinder_viz_step_{step_count}.png', rangefinder_viz)
                 print(f"Saved rangefinder visualization at step {step_count}")
-            
-            # In a desktop environment, you would use:
-            # cv2.imshow('Rangefinder Sensors', rangefinder_viz)
-            # cv2.waitKey(1)
 
             # Get vehicle and goal positions from sensors
             # vehicle_pos = data.sensordata[0:3]
